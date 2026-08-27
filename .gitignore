@@ -23,8 +23,11 @@ dist-ssr
 lifemanager-*.json
 
 # Built APKs. Large binaries that are rebuilt from source anyway; the dated
-# copies in the repo root are just what gets handed to the phone.
+# copies in the repo root are just what gets handed to the phone. The current
+# release apk is tracked on purpose (below) so it's downloadable straight from
+# the repo; older/superseded ones stay untracked.
 *.apk
+!lifemanager-1.6.0.apk
 
 # Editor directories and files
 .vscode/*
