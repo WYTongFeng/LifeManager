@@ -1,0 +1,2 @@
+Premain-Class: DisableAfUnix
+Can-Redefine-Classes: true

@@ -1,0 +1,76 @@
+apply plugin: 'com.android.application'
+
+// Version comes from package.json, not from a number typed here.
+//
+// Android REFUSES to install an APK whose versionCode is not greater than the
+// installed one — it fails with a bare "App not installed", which reads like a
+// corrupt download rather than "you forgot to bump a number". Keeping two
+// version sources in sync by hand is exactly the kind of step that gets missed,
+// and the failure lands on the user's phone rather than in the build.
+//
+// versionCode is derived so it always increases with the semver: 1.1.0 -> 10100.
+def appPackage = new groovy.json.JsonSlurper().parseText(
+        file("${rootDir}/../package.json").text)
+def semver = (appPackage.version as String).split('\\.')
+def vMajor = semver.length > 0 ? semver[0].toInteger() : 0
+def vMinor = semver.length > 1 ? semver[1].toInteger() : 0
+def vPatch = semver.length > 2 ? semver[2].toInteger() : 0
+
+android {
+    namespace = "com.lifemanager.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.lifemanager.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode vMajor * 10000 + vMinor * 100 + vPatch
+        versionName appPackage.version
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            // `!downloads` keeps the APK out of the APK. `scripts/release.mjs`
+            // copies the built APK into `dist/downloads/` so Firebase Hosting
+            // can serve it; `cap sync` then copies all of `dist` into these
+            // assets. Without this exclusion, the next build would package the
+            // previous release's 5 MB APK inside the new one — and the one
+            // after that would carry both.
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~:!downloads'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

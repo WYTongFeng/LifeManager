@@ -1,0 +1,38 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Firebase CLI's local hosting deploy cache — regenerated on every deploy.
+.firebase
+
+# Claude Code's per-machine permission allowlist — not shared project config.
+.claude/settings.local.json
+
+# Personal financial data. Backup files hold real account balances and debts —
+# they must never be committed, and the app is meant to be hosted publicly.
+lifemanager-*.json
+
+# Built APKs. Large binaries that are rebuilt from source anyway; the dated
+# copies in the repo root are just what gets handed to the phone.
+*.apk
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
