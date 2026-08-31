@@ -59,6 +59,16 @@ export const META_DOCS = {
   notesMeta: ['noteCategories'],
   reminders: ['reminders'],
   specialDays: ['specialDays'],
+  // The user's own spending/income categories: additions, renames, and which
+  // built-ins they've hidden. Its own document for the same reason as
+  // `notesMeta` — small, bounded (a handful of labels), and edited on one
+  // device at a time, so pushing it whole is safe.
+  //
+  // The BUILT-IN lists are not here and never will be: they ship in the code
+  // (moneyCategories.js), so syncing them would upload a copy of the app's own
+  // constants and let an old device's stale copy overwrite a newer one's.
+  // Only the user's deltas travel.
+  moneyCategories: ['moneyCategoryPrefs'],
 };
 
 /**

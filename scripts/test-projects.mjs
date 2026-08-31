@@ -1,4 +1,7 @@
-import { getProjects, getOpenProjects, findProjectFor, getDebtorStatus } from '../src/utils/projects.js';
+import {
+  getProjects, getOpenProjects, getClosedProjects, findProjectFor, getDebtorStatus,
+  ownSpendById, ownSpend, closedProjectRepaymentIds,
+} from '../src/utils/projects.js';
 
 let pass = 0, fail = 0;
 const check = (name, got, want) => {
@@ -112,6 +115,68 @@ const [tripProj] = getProjects(overpaid);
 const tripStatus = getDebtorStatus(tripProj, overpaid);
 check('overpaying a share floors owing at 0', tripStatus[0].owing, 0);
 check('overpaying still counts as paid', tripStatus[0].isPaid, true);
+
+// --- closing a project you were partly paying for yourself ------------------
+// The case that made closing necessary: RM100 dinner for four, three friends
+// send RM25 each, the last RM25 was always the user's own. Repayments can never
+// reach RM100, so without a manual close this sits in 进行中的项目 forever
+// showing "还差 RM 25" — a debt that nobody actually owes.
+const partlyMine = [
+  {
+    id: 1, date: '2026-08-12', merchant: 'Group Dinner', amount: 100, isProject: true,
+    category: 'food',
+    debtors: [{ name: 'Ah Meng', share: 25 }, { name: 'Wei Jie', share: 25 }, { name: 'Su Lin', share: 25 }],
+  },
+  { id: 2, date: '2026-08-13', merchant: 'Ah Meng', amount: -25, repaysExpenseId: 1 },
+  { id: 3, date: '2026-08-13', merchant: 'Wei Jie', amount: -25, repaysExpenseId: 1 },
+  { id: 4, date: '2026-08-14', merchant: 'Su Lin', amount: -25, repaysExpenseId: 1 },
+];
+
+const [stillOpen] = getProjects(partlyMine);
+check('everyone paid their share but it is still not settled', stillOpen.isSettled, false);
+check('...and it still shows RM25 outstanding that nobody owes', stillOpen.outstanding, 25);
+check('an open project is not closed', stillOpen.isClosed, false);
+check('open projects are NOT adjusted — the app cannot know the rest is yours',
+  ownSpendById(partlyMine).has(1), false);
+
+// The same list, with the project closed by hand.
+const closed = partlyMine.map(e => (e.id === 1 ? { ...e, closedAt: 1755000000000 } : e));
+const [closedProject] = getProjects(closed);
+check('closing settles it', closedProject.isSettled, true);
+check('closing marks it closed', closedProject.isClosed, true);
+check('myShare is what nobody paid back — the user\'s own portion', closedProject.myShare, 25);
+check('it drops out of the open list', getOpenProjects(closed).length, 0);
+check('and appears in the closed list', getClosedProjects(closed).map(p => p.id), [1]);
+
+// The point of the whole exercise: the category breakdown must charge this
+// user RM25 of 餐饮, not RM100. Three other people ate RM75 of that dinner.
+const overrides = ownSpendById(closed);
+check('a closed project contributes only the user\'s own share', ownSpend(closed[0], overrides), 25);
+check('an unrelated expense is untouched by the override map',
+  ownSpend({ id: 99, amount: 40 }, overrides), 40);
+check('ownSpend with no override map at all still returns the raw amount',
+  ownSpend({ id: 99, amount: 40 }, undefined), 40);
+
+// Double-subtraction guard. Once the project counts at RM25 (already net of
+// every repayment), counting those same repayments again as money received
+// would take the RM75 off twice.
+check('repayments of a closed project are flagged so they are not netted twice',
+  [...closedProjectRepaymentIds(closed)].sort((a, b) => a - b), [2, 3, 4]);
+check('repayments of an OPEN project are not flagged',
+  closedProjectRepaymentIds(partlyMine).size, 0);
+
+// Closing a project nobody has repaid at all — the whole thing was yours.
+const allMine = [{ id: 1, merchant: 'Solo booking', amount: 60, isProject: true, closedAt: 1755000000000 }];
+check('closing with zero repayments makes the entire amount yours',
+  getProjects(allMine)[0].myShare, 60);
+
+// Closing an OVERPAID project must not produce negative spending — a slice of
+// a pie cannot be negative, and it would silently reduce other categories.
+const overRepaid = [
+  { id: 1, merchant: 'Trip', amount: 50, isProject: true, closedAt: 1755000000000 },
+  { id: 2, merchant: 'Ah Meng', amount: -70, repaysExpenseId: 1 },
+];
+check('an overpaid closed project floors myShare at 0', getProjects(overRepaid)[0].myShare, 0);
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : fail + ' FAILED'}  (${pass} passed)`);
 if (fail > 0) process.exit(1);

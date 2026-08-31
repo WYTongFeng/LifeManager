@@ -15,6 +15,20 @@
 
 /**
  * Every project, with how much of it has been paid back so far.
+ *
+ * CLOSING A PROJECT, AND WHY IT HAD TO EXIST
+ * `isSettled` used to mean one thing only: repayments have reached the full
+ * amount. That is almost never true, because the person fronting the money is
+ * usually part of the group — you pay RM100 for a dinner four people ate, three
+ * friends send you RM25 each, and RM25 was always yours to pay. Repayments stop
+ * at RM75 and the project sits in 进行中的项目 forever with "还差 RM 25", which
+ * reads as a debt nobody owes.
+ *
+ * So a project can now be closed by hand (`closedAt`). Closing says: nothing
+ * more is coming, and whatever is left was mine all along. That leftover is
+ * `myShare`, and it is the number that should count as this user's own
+ * spending — see `ownSpend` below.
+ *
  * @param {Array} expenses  the full expense list, every date
  */
 export function getProjects(expenses) {
@@ -25,13 +39,88 @@ export function getProjects(expenses) {
         .filter(e => e.repaysExpenseId === project.id)
         .reduce((sum, e) => sum + Math.abs(e.amount), 0);
       const outstanding = Math.max(0, project.amount - repaidAmount);
-      return { ...project, repaidAmount, outstanding, isSettled: outstanding <= 0 };
+      const isClosed = project.closedAt != null;
+      return {
+        ...project,
+        repaidAmount,
+        outstanding,
+        isClosed,
+        // What the user themselves ended up paying: everything nobody sent
+        // back. Floored at 0 so an overpayment reads as "I paid nothing"
+        // rather than as negative spending.
+        myShare: Math.max(0, project.amount - repaidAmount),
+        // Fully repaid OR closed by hand. Both mean "stop asking about this".
+        isSettled: outstanding <= 0 || isClosed,
+      };
     });
 }
 
 /** Projects still owed money on — what the repayment dropdown offers. */
 export function getOpenProjects(expenses) {
   return getProjects(expenses).filter(p => !p.isSettled);
+}
+
+/** Projects closed by hand, newest first — the 已结束 list, and undo. */
+export function getClosedProjects(expenses) {
+  return getProjects(expenses)
+    .filter(p => p.isClosed)
+    .sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0));
+}
+
+/**
+ * How much of each expense is the user's OWN spending, keyed by expense id.
+ *
+ * Only closed projects appear in the map — everything else spends what it says
+ * it spends. A closed RM100 dinner with RM75 sent back contributes RM25, so
+ * the category breakdown and the monthly circle stop charging this user for
+ * three other people's share of a meal.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT TOUCH
+ * Account balances, and every net total in cycle.js. Those are about money
+ * that genuinely moved: RM100 really did leave the account and RM75 really did
+ * come back, and `spentThisCycle` already nets the pair correctly. This is
+ * only for the views that answer 「我花了多少」 — where the gross figure
+ * charges you for money that was never yours to spend.
+ *
+ * Open projects are untouched on purpose. Until a project is closed the app
+ * cannot know how much of it is yours: the RM25 still outstanding might be a
+ * friend who hasn't paid yet. Closing is the user stating that it isn't.
+ *
+ * @param {Array} expenses  the full expense list, every date
+ * @returns {Map<any, number>} expense id -> the amount that was actually yours
+ */
+export function ownSpendById(expenses) {
+  const map = new Map();
+  for (const p of getProjects(expenses)) {
+    if (p.isClosed) map.set(p.id, p.myShare);
+  }
+  return map;
+}
+
+/**
+ * The amount of one expense that counts as the user's own spending.
+ * `overrides` comes from `ownSpendById` — built once per list, not per row.
+ */
+export function ownSpend(expense, overrides) {
+  const adjusted = overrides?.get(expense?.id);
+  return adjusted != null ? adjusted : Number(expense?.amount) || 0;
+}
+
+/**
+ * Repayment records belonging to a CLOSED project.
+ *
+ * Once a project is closed its expense is counted at `myShare` — already net of
+ * every repayment — so counting those same repayments again as money received
+ * would subtract them twice. Anything reporting 另收 / refunds needs to skip
+ * exactly this set.
+ */
+export function closedProjectRepaymentIds(expenses) {
+  const closed = new Set(getProjects(expenses).filter(p => p.isClosed).map(p => p.id));
+  const ids = new Set();
+  for (const e of expenses) {
+    if (e.repaysExpenseId != null && closed.has(e.repaysExpenseId)) ids.add(e.id);
+  }
+  return ids;
 }
 
 /** The project a given repayment is linked to, if any. */
