@@ -87,6 +87,13 @@ const NOISE_RE = [
   /免费/,              // free
   /积分/,              // loyalty points
   /从\s*(?:RM|MYR)\s*[\d,.]+\s*起/, // "from RM300" — an advertised price, not a charge
+  // "资金支入成功 / 您已成功支入RMx到您的GO+账户" — TNG's own internal sweep into
+  // its GO+ investment sub-account. It fires alongside a separate, more useful
+  // notification for the same money ("您有一项支入 / 您已收到RMx 来自 <人名> 用于
+  // <用途>") that actually carries who sent it and what for. Keeping both would
+  // either double-count the same inflow or, since this one names no sender,
+  // fall through to `unknown` and sit in the manual review queue for no reason.
+  /支入.{0,20}GO\+\s*账户/,
 ];
 
 // Money coming IN. Checked before spend because reload messages also contain
@@ -110,6 +117,25 @@ const INCOME_RE = [
   /收到了?\s*(?:RM|MYR)/, // received RMx
   /返现/,              // cashback
 ];
+
+// "您有一项支入 / 您已收到RM 10.88 来自 YAP LEE CHIN 用于 ❤心早餐。" — the one
+// income notification that actually names who sent the money and what it was
+// for, unlike the generic "reload successful" / "已存入" messages. Only this
+// shape carries both, so it gets its own extraction instead of overloading the
+// spend-side merchant patterns above.
+const INCOME_SENDER_RE = /来自\s*([^\n。，,、；]+?)\s*(?:用于|[。，,、；]|$)/;
+const INCOME_PURPOSE_RE = /用于\s*([^\n。]+?)\s*(?:[。\n]|$)/;
+
+function extractIncomeSender(text) {
+  const m = text.match(INCOME_SENDER_RE);
+  const candidate = m ? m[1].trim() : null;
+  return candidate && !NOT_A_MERCHANT_RE.test(candidate) ? candidate : null;
+}
+
+function extractIncomePurpose(text) {
+  const m = text.match(INCOME_PURPOSE_RE);
+  return m ? m[1].trim() : null;
+}
 
 // Money going OUT, and it is a transfer to a person rather than a shop.
 // Split out because who you paid says nothing about what it was for — these
@@ -364,11 +390,18 @@ export function parseTngNotification(text, learned = {}) {
   }
 
   if (matchesAny(INCOME_RE, raw)) {
+    const sender = extractIncomeSender(raw);
+    const purpose = extractIncomePurpose(raw);
+    let reason;
+    if (amount && sender) {
+      reason = `Money coming in (RM ${amount.toFixed(2)}) from ${sender}${purpose ? ` for ${purpose}` : ''} — not counted as spending.`;
+    } else if (amount) {
+      reason = `Money coming in (RM ${amount.toFixed(2)}) — reloads and refunds are not spending, so this is not added to your budget.`;
+    } else {
+      reason = 'Money coming in — not counted as spending.';
+    }
     return {
-      ...base, kind: 'income', amount,
-      reason: amount
-        ? `Money coming in (RM ${amount.toFixed(2)}) — reloads and refunds are not spending, so this is not added to your budget.`
-        : 'Money coming in — not counted as spending.',
+      ...base, kind: 'income', amount, merchant: sender, reason,
     };
   }
 
@@ -462,5 +495,13 @@ export const SAMPLE_NOTIFICATIONS = [
   {
     label: 'Reload (money IN — not spending)',
     text: "Touch 'n Go eWallet\nReload successful! RM100.00 has been added to your TNG eWallet balance.",
+  },
+  {
+    label: 'GO+ internal sweep (must be ignored — duplicate of the transfer below)',
+    text: '资金支入成功\n您已成功支入RM10.88到您的GO+账户',
+  },
+  {
+    label: 'Received a transfer with sender + purpose (money IN — not spending)',
+    text: '您有一项支入\n您已收到RM 10.88 来自 YAP LEE CHIN 用于 ❤心早餐。',
   },
 ];
