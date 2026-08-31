@@ -5,6 +5,7 @@ import {
   setWatchedPackages as pushWatchedPackages,
 } from '../utils/tngNative';
 import { parseTngNotification } from '../utils/tngParser';
+import { FALLBACK_EXPENSE_CATEGORY } from '../utils/moneyCategories';
 import {
   accountForPackage, defaultAccount, ensureAccounts, watchedPackages,
 } from '../utils/accounts';
@@ -91,7 +92,7 @@ function processCapture(payload, ctx) {
       raw: payload.raw,
       merchant: parsed.merchant || '',
       amount: parsed.amount,
-      category: parsed.category || 'Other',
+      category: parsed.category || FALLBACK_EXPENSE_CATEGORY,
       isTransfer: parsed.isTransfer,
       reason: parsed.reason,
       accountId: account?.id ?? null,
@@ -113,7 +114,7 @@ function processCapture(payload, ctx) {
   // A wording the rules have not learned yet is a reason to ASK, not to
   // silently drop money: it goes in the same queue, flagged as unread.
   if (parsed.kind === 'unknown' && parsed.amount) {
-    queueItem({ unrecognised: true, category: 'Other' });
+    queueItem({ unrecognised: true, category: FALLBACK_EXPENSE_CATEGORY });
     return;
   }
 

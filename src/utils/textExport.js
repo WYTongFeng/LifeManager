@@ -27,6 +27,7 @@ import { getCycle, getPreviousCycle, isInCycle, computeCycleBudget } from './cyc
 import { describeDate, toHHMM, sortByTime, todayStr } from './datetime.js';
 import { countSets } from './workoutPlan.js';
 import { SESSION_INTENSITY } from './calories.js';
+import { categoryLabel } from './moneyCategories.js';
 
 const rm = (n) => `RM ${num(n).toFixed(2)}`;
 const line = (c = '-', w = 56) => c.repeat(w);
@@ -184,7 +185,7 @@ function categoryTotals(expenses) {
   const totals = new Map();
   for (const e of expenses.filter(isSpendingRecord)) {
     if (num(e.amount) <= 0) continue;
-    const key = e.category || 'Other';
+    const key = categoryLabel(e.category, 'expense');
     totals.set(key, (totals.get(key) ?? 0) + num(e.amount));
   }
   const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1]);

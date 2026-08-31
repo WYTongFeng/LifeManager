@@ -668,10 +668,29 @@ button:not(:disabled):active {
   to { opacity: 1; }
 }
 
-/* Tab Page Entrance Animation */
+/* Tab Page Entrance Animation
+
+   `backwards`, NOT `forwards`, and no resting `will-change` — both of those
+   left a transform and a filter applied to this wrapper permanently, long
+   after the 0.32s animation had finished.
+
+   That broke every modal in the app. A transform, a filter or a will-change on
+   an ancestor makes it the containing block for `position: fixed` descendants,
+   so `.modal-overlay`'s `inset: 0` stopped meaning "the viewport" and started
+   meaning "the whole scrollable tab page" — nearly 2000px tall. The overlay
+   was then sized and positioned against that, which put the dialog wherever
+   the bottom of the PAGE happened to be instead of on screen. Scrolled to the
+   top it looked close enough to right that it went unnoticed; anywhere else
+   the modal opened off-screen and the app looked frozen behind a dim layer.
+
+   `backwards` applies the 0% keyframe before the animation starts and drops
+   everything afterwards, which is what was wanted all along: the 100% keyframe
+   is already this element's natural resting state, so nothing needs pinning.
+   The `will-change` hint is not needed either — browsers already promote an
+   element with a running animation, and the whole point of will-change is that
+   it is temporary. */
 .tab-page-transition {
-  animation: tabFadeSlideIn 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  will-change: transform, opacity, filter;
+  animation: tabFadeSlideIn 0.32s cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
 @keyframes tabFadeSlideIn {

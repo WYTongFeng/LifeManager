@@ -113,6 +113,23 @@ users/{uid}/
                        and pulled whole, so sharing one would let a reminder edited on the
                        phone clobber a note category edited on the PC.
 
+  meta/moneyCategories moneyCategoryPrefs { custom[], hidden[], renamed{} }        (M55)
+                       The user's DELTAS only. The built-in 支出/支入 category lists ship in
+                       code (moneyCategories.js) and are deliberately never synced — uploading
+                       a copy of the app's own constants would let an old device's stale list
+                       overwrite a newer one's.
+                         custom   [{ id, label, emoji, kind: 'expense'|'income' }]
+                         hidden   [categoryId] — taken out of the pickers, NOT deleted
+                         renamed  { categoryId: label } — overrides a built-in's label
+                       Expenses store a category ID, never a label, so a rename can't orphan
+                       the records filed under it. A built-in can only be hidden, never
+                       deleted, for the same reason: a year of 宠物 spending must keep
+                       resolving to 宠物 after the category leaves the dropdown.
+                       LEGACY: records written before M55 store the old English strings
+                       ('Food & Dining'). Those are NOT migrated — LEGACY_ALIASES resolves
+                       them on read, which also lands an old record in the SAME pie slice as
+                       a new 餐饮 one instead of a second identically-named slice.
+
   meals/{id}           { date, name, calories, protein, carbs, fat, category, time, at }
                        + { source: 'local'|'ai'|null }    how the numbers were obtained (M45)
                        + { items[] }                      per-component breakdown (M45)
@@ -127,6 +144,19 @@ users/{uid}/
   expenses/{id}        { date, merchant, amount, category, note, source, accountId,
                          paymentMethod, time, at }
                        + { isProject, debtors[] }         money fronted for others
+                       + { closedAt }                     project ended by hand (M55). Repayments
+                                                          essentially never reach the full amount,
+                                                          because whoever fronts the money is
+                                                          usually one of the people eating — so a
+                                                          project could never settle itself and sat
+                                                          in 进行中的项目 showing a debt nobody
+                                                          owed. Closing means "nothing more is
+                                                          coming, the rest was mine"; that leftover
+                                                          (myShare) is what the category breakdown
+                                                          and the monthly circle then count.
+                                                          Balances and every net total in cycle.js
+                                                          are untouched — the money really did move.
+                                                          Reversible: deleting the field reopens it.
                        + { repaysExpenseId }              a repayment against one
                        + { repaysDebtId }                 a repayment against a DEBT you owe
                                                           (note the direction: repaysExpenseId is

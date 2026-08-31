@@ -4,7 +4,8 @@ import { usePersistentState } from '../utils/storage';
 import { num, newId } from '../utils/num';
 import { projectImpact } from '../utils/cycle';
 import { isUnlocked, formatRemaining, COOLDOWN_HOURS } from '../utils/impulse';
-import { CATEGORIES } from '../utils/tngParser';
+import { CategorySelect, CategoryText } from './CategoryPicker';
+import { FALLBACK_EXPENSE_CATEGORY } from '../utils/moneyCategories';
 import { accountById, defaultAccount } from '../utils/accounts';
 import { AccountPicker, AccountChip } from './AccountPicker';
 import { nowTimeStr } from '../utils/datetime';
@@ -33,7 +34,7 @@ export default function ImpulseSandbox({ budget, cycle, onApprove, accounts = []
   const [showModal, setShowModal] = useState(false);
   const [fLabel, setFLabel] = useState('');
   const [fAmount, setFAmount] = useState('');
-  const [fCategory, setFCategory] = useState('Other');
+  const [fCategory, setFCategory] = useState(FALLBACK_EXPENSE_CATEGORY);
   const [fAccountId, setFAccountId] = useState(null);
 
   // Countdowns are computed from wall-clock time, not stored state, so this
@@ -47,7 +48,7 @@ export default function ImpulseSandbox({ budget, cycle, onApprove, accounts = []
   }, [requests.length]);
 
   const resetForm = () => {
-    setFLabel(''); setFAmount(''); setFCategory('Other');
+    setFLabel(''); setFAmount(''); setFCategory(FALLBACK_EXPENSE_CATEGORY);
     setFAccountId(defaultAccount(accounts)?.id ?? null);
   };
 
@@ -118,7 +119,7 @@ export default function ImpulseSandbox({ budget, cycle, onApprove, accounts = []
                     <h4 style={{ fontSize: '0.88rem', fontWeight: '700' }}>{r.label}</h4>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px', flexWrap: 'wrap' }}>
                       <AccountChip accounts={accounts} accountId={r.accountId} size="xs" />
-                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{r.category}</span>
+                      <CategoryText value={r.category} style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }} />
                     </div>
                   </div>
                   <span style={{ fontSize: '1rem', fontWeight: '800', color: 'var(--color-accent-red)', flexShrink: 0 }}>
@@ -217,9 +218,12 @@ export default function ImpulseSandbox({ budget, cycle, onApprove, accounts = []
               </div>
               <div>
                 <label style={labelStyle}>分类</label>
-                <select value={fCategory} onChange={(e) => setFCategory(e.target.value)} style={inputStyle}>
-                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
+                <CategorySelect
+                  txType="expense"
+                  value={fCategory}
+                  onChange={setFCategory}
+                  style={inputStyle}
+                />
               </div>
               {/* Choosing the pot is part of deciding whether you can afford
                   it — the picker shows each balance, which is the number that

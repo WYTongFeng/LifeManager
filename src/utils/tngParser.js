@@ -31,19 +31,16 @@
 // the reader in the Money tab, see the verdict, and add a line to the matching
 // list here. That is the whole story — no retraining, no API.
 
-export const CATEGORIES = [
-  'Food & Dining',
-  'Groceries',
-  'Transportation',
-  'Shopping',
-  'Bills & Utilities',
-  'Entertainment',
-  'Health',
-  'Personal Care',
-  'Education',
-  'Transfer to person',
-  'Other',
-];
+// The category vocabulary lives in moneyCategories.js now — expenses and income
+// each have their own list there, and the user can add to both. This file only
+// needs the ids it can actually infer from a notification, which is a strict
+// subset: a payment notification can reveal a shop, never a salary.
+//
+// Re-exported so the one-import call sites that only want "the expense list"
+// don't each have to learn about two modules.
+export { BUILTIN_EXPENSE_CATEGORIES, BUILTIN_INCOME_CATEGORIES } from './moneyCategories.js';
+
+const OTHER = 'other';
 
 // RM1,234.56 / RM 16.50 / RM 13.90 / MYR 4.20
 const AMOUNT_RE = /(?:RM|MYR)\s*([\d,]+(?:\.\d{1,2})?)/i;
@@ -222,50 +219,75 @@ const ZH_MERCHANT_RE = [
 // called 了. Anything that is only grammar is not a name.
 const NOT_A_MERCHANT_RE = /^(your|the)\b|wallet|account|balance|钱包|余额|账户|^tng$|touch ?'?n ?go|^[了的给和与至到把从]+$/i;
 
-// Merchant keyword -> category. Order matters: the first list whose keyword
+// Merchant keyword -> category id. ORDER MATTERS: the first list whose keyword
 // appears in the merchant name wins, so specific lists sit above general ones.
+//
+// Three orderings here are load-bearing, not stylistic:
+//   · delivery before transport — 'grab' is a substring of 'grabfood', so a
+//     GrabFood order would otherwise be filed as a taxi ride.
+//   · drinks before food — 'coffee' appears in both vocabularies, and a
+//     RM6 ZUS is a drink, not a meal out.
+//   · fuel and telco before transport and utilities — they were carved out of
+//     those two when the category list grew, and the general list would
+//     swallow them again if it ran first.
 const CATEGORY_RULES = [
-  ['Transportation', ['rapidkl', 'rapid kl', ' lrt', 'lrt ', 'mrt', 'ktm', 'monorail', 'komuter',
+  ['delivery', ['grabfood', 'grab food', 'foodpanda', 'food panda', 'shopeefood', 'shopee food',
+    'deliveroo', 'lalamove', '外卖', '送餐']],
+  ['drinks', ['tealive', 'zus coffee', 'zus ', 'chatime', 'boost juice', 'bubble', 'starbucks',
+    'coffee bean', 'llaollao', 'gong cha', 'tiger sugar', 'kopi ', 'coffee', 'bubble tea',
+    '奶茶', '咖啡', '茶饮']],
+  ['fuel', ['petronas', 'shell select', 'shell ', 'caltex', 'bhpetrol', 'bh petrol', 'petron',
+    'petrol', 'setel', '油站', '加油']],
+  ['transport', ['rapidkl', 'rapid kl', ' lrt', 'lrt ', 'mrt', 'ktm', 'monorail', 'komuter',
     'grab', 'myteksi', 'toll', 'tol ', 'plus highway', 'smarttag', 'smart tag', 'parking', 'parkir',
-    'petronas', 'shell', 'caltex', 'bhpetrol', 'petron', 'petrol', 'transit', 'airasia', 'aeroline',
-    '交通', '停车', '过路费', '油站']],
-  ['Groceries', ['grocer', 'tesco', 'lotus', 'giant', 'aeon', 'mydin', 'econsave', 'speedmart',
+    'touch n go tol', 'transit', 'airasia', 'aeroline', 'maxim', 'indriver',
+    '交通', '停车', '过路费']],
+  ['groceries', ['grocer', 'tesco', 'lotus', 'giant', 'aeon', 'mydin', 'econsave', 'speedmart',
     'hero market', 'supermarket', 'sundry', 'family mart', 'familymart', '7-eleven', '7 eleven',
-    'kk super', 'kk mart', 'mynews', 'cold storage', '超市', '杂货']],
-  ['Health', ['clinic', 'klinik', 'pharmacy', 'farmasi', 'hospital', 'dental', 'pergigian',
+    'kk super', 'kk mart', 'mynews', 'cold storage', 'jaya grocer', 'village grocer',
+    '超市', '杂货']],
+  ['health', ['clinic', 'klinik', 'pharmacy', 'farmasi', 'hospital', 'dental', 'pergigian',
     'caring', 'big pharmacy', 'alpro', 'poliklinik', '诊所', '药房', '医院']],
-  ['Personal Care', ['salon', 'hair studio', 'hairdresser', 'barber', 'haircut', 'nail',
+  ['personal-care', ['salon', 'hair studio', 'hairdresser', 'barber', 'haircut', 'nail',
     'spa', 'massage', 'reflexology', 'laundry', 'dobi', 'dry clean', 'beauty', 'cosmetic',
     'skincare', 'sephora', '理发', '发廊', '美发', '美容', '美甲', '按摩', '洗衣', '干洗']],
-  ['Bills & Utilities', ['tnb', 'tenaga', 'syabas', 'air selangor', 'indah water', 'unifi',
-    'maxis', 'celcom', 'digi', 'u mobile', 'umobile', 'yes 4g', 'astro', 'time internet',
-    'telekom', 'bill payment', 'prepaid reload', '账单', '水电', '话费']],
-  ['Entertainment', ['gsc', 'golden screen', 'tgv', 'mbo cinema', 'cinema', 'netflix', 'spotify',
-    'steam', 'playstation', 'karaoke', 'redbox', 'bowling', '电影', '戏院']],
-  ['Shopping', ['shopee', 'lazada', 'zalora', 'uniqlo', 'h&m', 'padini', 'brands outlet',
+  // Recurring digital charges. Split out of 娱乐 and 账单 because a monthly
+  // subscription is the thing this user most wants to see as its own number —
+  // it is the spending that continues without a decision being made.
+  ['subscription', ['netflix', 'spotify', 'youtube premium', 'disney', 'viu', 'iqiyi',
+    'chatgpt', 'openai', 'claude', 'anthropic', 'google one', 'icloud', 'microsoft 365',
+    'adobe', 'canva', 'notion', 'dropbox', '会员', '订阅']],
+  ['telco', ['unifi', 'maxis', 'celcom', 'celcomdigi', 'digi', 'u mobile', 'umobile', 'yes 4g',
+    'time internet', 'telekom', 'tm ', 'prepaid reload', 'topup', '话费', '宽带']],
+  ['utilities', ['tnb', 'tenaga', 'syabas', 'air selangor', 'indah water', 'astro',
+    'bill payment', '账单', '水电']],
+  ['entertainment', ['gsc', 'golden screen', 'tgv', 'mbo cinema', 'cinema', 'steam',
+    'playstation', 'nintendo', 'karaoke', 'redbox', 'bowling', '电影', '戏院', 'ktv']],
+  ['fitness', ['gym', 'fitness', 'anytime fitness', 'celebrity fitness', 'chin woo',
+    'yoga', 'pilates', 'badminton', 'futsal', '健身', '瑜伽', '羽球']],
+  ['shopping', ['shopee', 'lazada', 'zalora', 'uniqlo', 'h&m', 'padini', 'brands outlet',
     'watsons', 'guardian', 'mr diy', 'mr. diy', 'decathlon', 'popular book', 'ikea', 'courts',
     // NB: no 'alipay' here. ALIPAY+ is the payment rail the notification came
     // over, like "paid by Visa" — it appears on purchases of every kind and
     // says nothing about what was bought.
     'pinduoduo', 'taobao', 'tmall', 'aliexpress', 'temu', '拼多多', '淘宝', '天猫',
     '购物', '商城']],
-  ['Education', ['tuition', 'sekolah', 'school', 'university', 'universiti', 'kolej', 'college',
+  ['education', ['tuition', 'sekolah', 'school', 'university', 'universiti', 'kolej', 'college',
     'academy', 'akademi', '学校', '大学', '补习']],
-  ['Food & Dining', ['restoran', 'restaurant', 'cafe', 'kafe', 'kopitiam', 'mamak', 'warung',
-    'mcdonald', 'kfc', 'pizza', 'subway', 'burger', 'starbucks', 'tealive', 'zus coffee',
-    'chatime', 'boost juice', 'bubble', 'secret recipe', 'nasi', 'mee ', 'char kuey',
+  ['food', ['restoran', 'restaurant', 'cafe', 'kafe', 'kopitiam', 'mamak', 'warung',
+    'mcdonald', 'kfc', 'pizza', 'subway', 'burger', 'secret recipe', 'nasi', 'mee ', 'char kuey',
     'chicken rice', 'bakery', 'bake', 'dessert', 'ice cream', 'bistro', 'eatery', 'food court',
-    'foodcourt', 'catering', 'coffee', 'tea house', 'sushi', 'ramen', 'steamboat',
-    '餐厅', '茶室', '咖啡', '美食', '饮食']],
+    'foodcourt', 'catering', 'tea house', 'sushi', 'ramen', 'steamboat',
+    '餐厅', '茶室', '美食', '饮食']],
 ];
 
 // Keywords that reveal the purpose from the message body rather than the shop
-// name — "RM3.00 toll charge at PLUS Sungai Besi" only says Transportation
-// through the word "toll". Deliberately tiny: scanning the whole notification
-// with the full rule list matches app names and payment rails ("ALIPAY+") and
-// invents a confident, wrong category. Only unambiguous purpose words belong here.
+// name — "RM3.00 toll charge at PLUS Sungai Besi" only says 交通 through the
+// word "toll". Deliberately tiny: scanning the whole notification with the full
+// rule list matches app names and payment rails ("ALIPAY+") and invents a
+// confident, wrong category. Only unambiguous purpose words belong here.
 const CONTEXT_RULES = [
-  ['Transportation', [/\btoll\b/i, /\bparking\b/i, /\btransit fare\b/i, /\bfare\b/i,
+  ['transport', [/\btoll\b/i, /\bparking\b/i, /\btransit fare\b/i, /\bfare\b/i,
     /过路费/, /停车/, /车费/]],
 ];
 
@@ -273,7 +295,7 @@ function categoriseByContext(text) {
   for (const [category, patterns] of CONTEXT_RULES) {
     if (patterns.some(re => re.test(text))) return category;
   }
-  return 'Other';
+  return OTHER;
 }
 
 function toAmount(text) {
@@ -328,11 +350,11 @@ export function merchantKey(merchant) {
 // notification, where a learned merchant name could otherwise false-match.
 function categoriseByRules(text) {
   const key = merchantKey(text);
-  if (!key) return 'Other';
+  if (!key) return OTHER;
   for (const [category, keywords] of CATEGORY_RULES) {
     if (keywords.some(word => key.includes(word.trim()))) return category;
   }
-  return 'Other';
+  return OTHER;
 }
 
 /**
@@ -342,7 +364,7 @@ function categoriseByRules(text) {
  */
 export function categorise(merchant, learned = {}) {
   const key = merchantKey(merchant);
-  if (!key) return 'Other';
+  if (!key) return OTHER;
 
   if (learned[key]) return learned[key];
   // A remembered merchant may be a substring of the notification's version of
@@ -420,13 +442,13 @@ export function parseTngNotification(text, learned = {}) {
     // look at the message body, and then only for unambiguous purpose words —
     // see CONTEXT_RULES for why this isn't the full rule list.
     let category = categorise(merchant, learned);
-    if (category === 'Other') category = categoriseByContext(raw);
+    if (category === OTHER) category = categoriseByContext(raw);
 
     // A transfer always asks, even to someone you've paid before — the same
     // person can be dinner one week and rent the next. A merchant that matched
     // no rule asks once; teaching it a category stops it asking again.
-    const needsPurpose = isTransfer || category === 'Other';
-    if (isTransfer && category === 'Other') category = 'Transfer to person';
+    const needsPurpose = isTransfer || category === OTHER;
+    if (isTransfer && category === OTHER) category = 'transfer-person';
 
     let reason;
     if (isTransfer) {

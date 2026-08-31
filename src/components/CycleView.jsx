@@ -19,6 +19,10 @@ import { resolveAccounts, defaultAccount, accountById, isRealSpend } from '../ut
 import { AccountSelect, AccountChip } from './AccountPicker';
 import ImpulseSandbox from './ImpulseSandbox';
 import SpendPie from './SpendPie';
+import { ownSpendById, ownSpend } from '../utils/projects';
+import {
+  CATEGORY_PREFS_KEY, categoryLabel, resolveCategoryId,
+} from '../utils/moneyCategories';
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 const MONTHS = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
@@ -212,6 +216,11 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
   // denominator and the slices themselves for the same reason M18 excludes
   // them from the daily breakdown: a negative slice reads as confusing, not
   // informative.
+  // The user's own category names, so a rename in 管理分类 reaches the chart.
+  const categoryPrefs = useLiveJSON(CATEGORY_PREFS_KEY, null);
+  // Shared by the slices and their drill-down rows, so the two can't disagree.
+  const cycleOwnSpendMap = useMemo(() => ownSpendById(expenses), [expenses]);
+
   const cycleCategoryBreakdown = useMemo(() => {
     // `!isAccountTransfer` matters here: the +X half of a transfer between your
     // own accounts is not a purchase, and would otherwise show up as a
@@ -228,14 +237,19 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
     // as a month of overspending. This chart never got the same treatment.
     const positive = expenses.filter(e =>
       isRealSpend(e) && isInCycle(e.date ?? cycle.start, cycle) && Number(e.amount) > 0);
+    // A closed project counts only the share nobody paid back. Built from the
+    // FULL list, not this cycle's slice: a repayment can land in a later cycle
+    // than the dinner it settles, and filtering first would make the project
+    // look unrepaid. See projects.js.
+    const ownSpendMap = cycleOwnSpendMap;
     const totals = Object.values(
       positive.reduce((acc, e) => {
-        const key = e.category || 'Other';
+        const key = resolveCategoryId(e.category, 'expense');
         // `records` is what makes the chart openable. A category total answers
         // "how much on food" and nothing else; the question actually being
         // asked is "on WHAT", and that needs the rows.
         if (!acc[key]) acc[key] = { category: key, total: 0, records: [] };
-        acc[key].total += Number(e.amount);
+        acc[key].total += ownSpend(e, ownSpendMap);
         acc[key].records.push(e);
         return acc;
       }, {})
@@ -246,7 +260,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
       t.records.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || (b.at ?? 0) - (a.at ?? 0));
     }
     return totals.sort((a, b) => b.total - a.total);
-  }, [expenses, cycle]);
+  }, [expenses, cycle, cycleOwnSpendMap]);
 
   // "我的钱去哪里了" — the whole cycle in one circle, not just the shopping.
   //
@@ -272,7 +286,10 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
       ...autoAllocations.map(a => ({ key: a.id, label: a.label, value: num(a.amount) })),
       ...cycleCategoryBreakdown.map(c => ({
         key: `cat:${c.category}`,
-        label: c.category,
+        // The category's own name, in Chinese, resolved through the same table
+        // the pickers use — so a renamed category is renamed here too, and an
+        // old record's "Food & Dining" reads as 餐饮 without being rewritten.
+        label: categoryLabel(c.category, 'expense', categoryPrefs),
         value: c.total,
         items: c.records.map(e => ({
           id: e.id,
@@ -281,7 +298,9 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
           // not enough to recognise a charge — which is the entire reason this
           // drill-down was asked for.
           sub: [describeDate(e.date ?? cycle.start, todayStr), e.note].filter(Boolean).join(' · '),
-          amount: Number(e.amount) || 0,
+          // The row shows what this user paid, matching its slice — a closed
+          // project's row would otherwise read RM100 inside a RM25 slice.
+          amount: ownSpend(e, cycleOwnSpendMap),
         })),
       })),
     ];
@@ -291,7 +310,8 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
       slices.push({ key: '__left', label: '还没花', value: budget.available, muted: true });
     }
     return slices;
-  }, [manualAllocations, autoAllocations, cycleCategoryBreakdown, budget.available, cycle.start, todayStr]);
+  }, [manualAllocations, autoAllocations, cycleCategoryBreakdown, budget.available,
+    cycle.start, todayStr, categoryPrefs, cycleOwnSpendMap]);
 
   // --- debt: this cycle's plan, and logging a repayment ---------------------
   //

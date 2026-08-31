@@ -8,7 +8,8 @@ import {
   isNativeAvailable, isStaleApk, getStatus, openPermissionSettings,
   startDiscovery, stopDiscovery, getDiscovered,
 } from '../utils/tngNative';
-import { merchantKey, CATEGORIES } from '../utils/tngParser';
+import { merchantKey } from '../utils/tngParser';
+import { CategorySelect } from './CategoryPicker';
 import { defaultAccount, accountById, sameId, typeMeta } from '../utils/accounts';
 import { dateStamp } from '../hooks/useTngCapture';
 import { AccountSelect } from './AccountPicker';
@@ -520,9 +521,15 @@ export default function TngAutoCapture({
                   </div>
                   <div style={{ width: '38%' }}>
                     <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>分类</label>
-                    <select value={item.category} onChange={(e) => updateItem(item.id, { category: e.target.value })} style={inputStyle}>
-                      {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                    {/* Always the expense list: this queue only ever holds
+                        money that LEFT the wallet — an income notification is
+                        logged and reported, never parked here for review. */}
+                    <CategorySelect
+                      txType="expense"
+                      value={item.category}
+                      onChange={(id) => updateItem(item.id, { category: id })}
+                      style={inputStyle}
+                    />
                   </div>
                 </div>
 

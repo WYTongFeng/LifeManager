@@ -20,10 +20,16 @@ import { TNG_LOGGED_EVENT } from '../hooks/useTngCapture';
 import ClipboardWatch from './ClipboardWatch';
 import TextExportModal from './TextExportModal';
 import {
-  parseTngNotification, categorise, merchantKey,
-  CATEGORIES, SAMPLE_NOTIFICATIONS
+  parseTngNotification, categorise, merchantKey, SAMPLE_NOTIFICATIONS
 } from '../utils/tngParser';
-import { getProjects, getOpenProjects, getDebtorStatus } from '../utils/projects';
+import { CategorySelect, CategoryText, useMoneyCategories } from './CategoryPicker';
+import CategoryManager from './CategoryManager';
+import {
+  FALLBACK_EXPENSE_CATEGORY, FALLBACK_INCOME_CATEGORY, resolveCategoryId, categoryKindFor,
+} from '../utils/moneyCategories';
+import {
+  getProjects, getOpenProjects, getClosedProjects, getDebtorStatus, ownSpendById, ownSpend,
+} from '../utils/projects';
 import { isNativeAvailable } from '../utils/tngNative';
 import { getCycle } from '../utils/cycle';
 
@@ -120,7 +126,7 @@ export default function MoneyModule({
   // Entry form
   const [formMerchant, setFormMerchant] = useState('');
   const [formAmount, setFormAmount] = useState('');
-  const [formCategory, setFormCategory] = useState('Other');
+  const [formCategory, setFormCategory] = useState(FALLBACK_EXPENSE_CATEGORY);
   const [formNote, setFormNote] = useState('');
   // A reimbursement (a friend paying back a meal you fronted) is stored as a
   // NEGATIVE expense rather than as income — every total in this app is a
@@ -142,6 +148,10 @@ export default function MoneyModule({
   const formRefund = formDirection !== 'out';
   const formMoneyIn = formDirection === 'in';
   const setFormRefund = (isIn) => setFormDirection(isIn ? 'refund' : 'out');
+  // Which vocabulary the category picker should offer. Money arriving reads
+  // from the income list (工资, 朋友还钱), money leaving from the expense one —
+  // stated once here rather than at the picker, so the two can't drift.
+  const formTxType = formMoneyIn ? 'income' : formRefund ? 'refund' : 'expense';
   // Only meaningful on the "我出的钱" side — marks this expense as one others
   // owe money back on, so later repayments can be filed under it.
   const [formIsProject, setFormIsProject] = useState(false);
@@ -197,7 +207,31 @@ export default function MoneyModule({
   // back next week would silently fail to count against the project.
   const projects = useMemo(() => getProjects(allExpenses ?? expenses), [allExpenses, expenses]);
   const openProjects = useMemo(() => getOpenProjects(allExpenses ?? expenses), [allExpenses, expenses]);
+  const closedProjects = useMemo(() => getClosedProjects(allExpenses ?? expenses), [allExpenses, expenses]);
   const projectsById = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
+  // What each expense actually cost THIS user — a closed project counts only
+  // the share nobody paid back. Built once here rather than per row.
+  const ownSpendMap = useMemo(() => ownSpendById(allExpenses ?? expenses), [allExpenses, expenses]);
+
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [confirmCloseProject, setConfirmCloseProject] = useState(null);
+
+  /**
+   * End a project: nothing more is coming back, and whatever is left was mine.
+   *
+   * Stamps `closedAt` on the original expense — it does NOT create, delete or
+   * adjust any record. The money already moved correctly; this only settles
+   * the question of how much of it was ever the user's to count.
+   */
+  const closeProject = (project) => {
+    setExpenses(prev => prev.map(e => (e.id === project.id ? { ...e, closedAt: Date.now() } : e)));
+    setConfirmCloseProject(null);
+  };
+
+  const reopenProject = (project) => {
+    // eslint-disable-next-line no-unused-vars
+    setExpenses(prev => prev.map(e => (e.id === project.id ? (({ closedAt: _c, ...rest }) => rest)(e) : e)));
+  };
 
   // Notification reader
   const [pasteText, setPasteText] = useState('');
@@ -207,7 +241,7 @@ export default function MoneyModule({
   // wrong category gets corrected before it ever reaches the expense log.
   const [readerMerchant, setReaderMerchant] = useState('');
   const [readerAmount, setReaderAmount] = useState('');
-  const [readerCategory, setReaderCategory] = useState('Other');
+  const [readerCategory, setReaderCategory] = useState(FALLBACK_EXPENSE_CATEGORY);
   const [readerNote, setReaderNote] = useState('');
   const [readerAccountId, setReaderAccountId] = useState(null);
 
@@ -215,12 +249,27 @@ export default function MoneyModule({
     if (parsed.kind !== 'spend') return;
     setReaderMerchant(parsed.merchant || '');
     setReaderAmount(parsed.amount != null ? String(parsed.amount) : '');
-    setReaderCategory(parsed.category || 'Other');
+    setReaderCategory(parsed.category || FALLBACK_EXPENSE_CATEGORY);
     setReaderNote('');
     setReaderAccountId(prev => prev ?? fallbackAccountId);
     // Keyed on the parser's output, so typing that doesn't change the verdict
     // won't wipe an edit you just made to these fields.
   }, [parsed.kind, parsed.merchant, parsed.amount, parsed.category, fallbackAccountId]);
+
+  // Flipping 出/入 swaps which category list the picker offers, and an expense
+  // id means nothing in the income list — leaving 餐饮 selected on an arrival
+  // would file a salary under it. Reset to that list's 其他 instead, but only
+  // when the current pick genuinely doesn't belong, so reopening an existing
+  // record to edit its note never quietly recategorises it.
+  const formCategoryKind = categoryKindFor(formTxType);
+  const { categories: formCategoryOptions } = useMoneyCategories(formCategoryKind);
+  useEffect(() => {
+    const fallback = formCategoryKind === 'income' ? FALLBACK_INCOME_CATEGORY : FALLBACK_EXPENSE_CATEGORY;
+    setFormCategory(prev => {
+      const id = resolveCategoryId(prev, formCategoryKind);
+      return formCategoryOptions.some(c => c.id === id) ? id : fallback;
+    });
+  }, [formCategoryKind, formCategoryOptions]);
 
   // A transfer to a person, or a shop no rule recognises, tells you the amount
   // but not what it bought — so the note is required before it can be logged.
@@ -310,9 +359,12 @@ export default function MoneyModule({
     positiveExpenses.reduce((acc, item) => {
       // A record with no category used to key this map on `undefined`, which
       // then rendered a slice literally labelled "undefined".
-      const key = item.category || 'Other';
+      const key = resolveCategoryId(item.category, 'expense');
       if (!acc[key]) acc[key] = { category: key, total: 0 };
-      acc[key].total += num(item.amount);
+      // `ownSpend`, not `item.amount`: a closed project counts only the share
+      // nobody paid back, so a RM100 group dinner three friends settled shows
+      // as the RM25 that was actually this user's.
+      acc[key].total += num(ownSpend(item, ownSpendMap));
       return acc;
     }, {})
   ).sort((a, b) => b.total - a.total);
@@ -347,7 +399,7 @@ export default function MoneyModule({
     setEditingId(null);
     setFormMerchant('');
     setFormAmount('');
-    setFormCategory('Other');
+    setFormCategory(FALLBACK_EXPENSE_CATEGORY);
     setFormNote('');
     setFormRefund(false);
     setFormIsProject(false);
@@ -387,7 +439,7 @@ export default function MoneyModule({
     // sign — so a refund's stored negative amount is shown as its absolute
     // value, matching how it was typed in the first place.
     setFormAmount(String(Math.abs(expense.amount)));
-    setFormCategory(expense.category || 'Other');
+    setFormCategory(resolveCategoryId(expense.category, categoryKindFor(txType(expense))));
     setFormNote(expense.note || '');
     // Both incoming kinds are stored negative, so the sign alone can't tell
     // them apart — an arrival reopened as a refund would silently start
@@ -997,12 +1049,21 @@ export default function MoneyModule({
       {/* Spend by Category Breakdown */}
       {categoryBreakdown.length > 0 && (
         <div className="glass-card">
-          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '10px', display: 'block' }}>Spend by Category</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>今天花在哪几类</span>
+            <button
+              onClick={() => setShowCategoryManager(true)}
+              className="btn-secondary"
+              style={{ padding: '3px 9px', fontSize: '0.64rem' }}
+            >
+              管理分类
+            </button>
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {categoryBreakdown.map((c) => (
               <div key={c.category}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '3px' }}>
-                  <span style={{ color: 'var(--text-primary)' }}>{c.category}</span>
+                  <CategoryText value={c.category} style={{ color: 'var(--text-primary)' }} />
                   <span style={{ color: 'var(--text-secondary)' }}>RM {c.total.toFixed(2)} ({Math.round((c.total / totalPositiveSpend) * 100)}%)</span>
                 </div>
                 <div style={{ height: '5px', background: 'var(--border-glass)', borderRadius: 'var(--radius-sm)' }}>
@@ -1092,12 +1153,117 @@ export default function MoneyModule({
                     ))}
                   </div>
                 )}
+
+                {/* 结束项目 — the way out.
+                    Repayments essentially never reach the full amount, because
+                    the person fronting the money is usually one of the people
+                    eating. Without this the project sits here forever showing
+                    「还差 RM 25」 for a share nobody owes. Closing says the rest
+                    was mine, and that share becomes this user's own spending. */}
+                <button
+                  onClick={() => setConfirmCloseProject(p)}
+                  className="btn-secondary"
+                  style={{ marginTop: '10px', width: '100%', fontSize: '0.72rem', padding: '0.45rem' }}
+                >
+                  <Check size={13} /> 结束这个项目（剩下的 RM {p.outstanding.toFixed(2)} 算我自己花的）
+                </button>
               </div>
               );
             })}
           </div>
         </div>
       )}
+
+      {/* Closed projects — kept visible and reversible.
+          A close is a judgement call ("nobody else is paying"), and judgement
+          calls get made wrongly, so this is not a one-way door: reopening puts
+          the project back with its full amount and every repayment intact. */}
+      {closedProjects.length > 0 && (
+        <details>
+          <summary style={{
+            fontSize: '0.78rem', fontWeight: '600', color: 'var(--text-secondary)',
+            cursor: 'pointer', padding: '0.35rem 0',
+          }}>
+            已结束的项目（{closedProjects.length}）
+          </summary>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px' }}>
+            {closedProjects.map(p => (
+              <div key={p.id} className="glass-card" style={{ padding: '0.7rem 0.85rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
+                  <span style={{ fontSize: '0.82rem', fontWeight: '700', minWidth: 0 }}>{p.merchant}</span>
+                  <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)', flexShrink: 0 }}>{p.date}</span>
+                </div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                  垫了 RM {p.amount.toFixed(2)} · 收回 RM {p.repaidAmount.toFixed(2)} ·{' '}
+                  <strong style={{ color: 'var(--color-accent-red)' }}>我自己出 RM {p.myShare.toFixed(2)}</strong>
+                </div>
+                <button
+                  onClick={() => reopenProject(p)}
+                  className="btn-secondary"
+                  style={{ marginTop: '8px', fontSize: '0.66rem', padding: '3px 9px' }}
+                >
+                  重新打开
+                </button>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {/* Closing changes what counts as this user's own spending, so it says
+          the resulting number out loud before doing it rather than after. */}
+      {confirmCloseProject && (
+        <div className="modal-overlay" onClick={() => setConfirmCloseProject(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.9rem' }}>
+              <h3 style={{ fontSize: '1.02rem', fontWeight: '700' }}>结束「{confirmCloseProject.merchant}」?</h3>
+              <button onClick={() => setConfirmCloseProject(null)} aria-label="取消"
+                style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer' }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{
+              padding: '0.7rem 0.85rem', borderRadius: 'var(--radius-sm)',
+              background: 'var(--bg-input)', border: '1px solid var(--border-glass)',
+              fontSize: '0.76rem', lineHeight: 1.9,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>我垫的</span>
+                <span>RM {confirmCloseProject.amount.toFixed(2)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>朋友还的</span>
+                <span style={{ color: 'var(--color-money)' }}>− RM {confirmCloseProject.repaidAmount.toFixed(2)}</span>
+              </div>
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', fontWeight: '700',
+                borderTop: '1px solid var(--border-glass)', marginTop: '4px', paddingTop: '4px',
+              }}>
+                <span>我自己花的</span>
+                <span style={{ color: 'var(--color-accent-red)' }}>RM {confirmCloseProject.myShare.toFixed(2)}</span>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.6, marginTop: '0.8rem' }}>
+              结束之后，这笔在<strong>分类统计和本月的圆圈</strong>里只算 RM {confirmCloseProject.myShare.toFixed(2)} —
+              朋友那部分本来就不是你的钱。户口余额和已经记好的每一笔都不会动，
+              随时可以在「已结束的项目」里重新打开。
+            </p>
+
+            <div style={{ display: 'flex', gap: '10px', marginTop: '1.1rem' }}>
+              <button onClick={() => setConfirmCloseProject(null)} className="btn-secondary" style={{ flex: 1 }}>
+                取消
+              </button>
+              <button onClick={() => closeProject(confirmCloseProject)} className="btn-primary" style={{ flex: 1 }}>
+                <Check size={15} /> 结束项目
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCategoryManager && <CategoryManager onClose={() => setShowCategoryManager(false)} />}
 
       {/* Expenses Log — PURCHASES only, and now strictly so.
           Four other things live in this same array and each is money moving for
@@ -1165,7 +1331,7 @@ export default function MoneyModule({
                     )}
                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '3px', flexWrap: 'wrap' }}>
                       <AccountChip accounts={accounts} accountId={item.accountId} size="xs" />
-                      <span>{item.category}</span>
+                      <CategoryText value={item.category} txType={txType(item)} />
                       <span>•</span>
                       <span>{item.time}</span>
                       {item.source && <span style={{ color: 'var(--color-money)' }}>• {item.source}</span>}
@@ -1175,9 +1341,15 @@ export default function MoneyModule({
                       return (
                         <div style={{ marginTop: '5px' }}>
                           <div style={{ fontSize: '0.66rem', color: p.isSettled ? 'var(--color-money)' : 'var(--color-diet)' }}>
-                            {p.isSettled
-                              ? `已结清 · 收回 RM ${p.repaidAmount.toFixed(2)}`
-                              : `已还 RM ${p.repaidAmount.toFixed(2)} / RM ${p.amount.toFixed(2)}`}
+                            {/* A closed project reports what it actually cost
+                                this user, because that is the number the
+                                category totals now use — showing only 收回 here
+                                would leave the row disagreeing with the chart. */}
+                            {p.isClosed
+                              ? `已结束 · 收回 RM ${p.repaidAmount.toFixed(2)} · 我自己出 RM ${p.myShare.toFixed(2)}`
+                              : p.isSettled
+                                ? `已结清 · 收回 RM ${p.repaidAmount.toFixed(2)}`
+                                : `已还 RM ${p.repaidAmount.toFixed(2)} / RM ${p.amount.toFixed(2)}`}
                           </div>
                           <div style={{ height: '4px', background: 'var(--border-glass)', borderRadius: '2px', marginTop: '3px', maxWidth: '160px' }}>
                             <div style={{
@@ -1317,7 +1489,7 @@ export default function MoneyModule({
                     )}
                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '3px', flexWrap: 'wrap' }}>
                       <AccountChip accounts={accounts} accountId={item.accountId} size="xs" />
-                      <span>{item.category}</span>
+                      <CategoryText value={item.category} txType={txType(item)} />
                       <span>•</span>
                       <span>{item.time}</span>
                       {item.repaysExpenseId != null && projectsById.get(item.repaysExpenseId) && (
@@ -1489,18 +1661,34 @@ export default function MoneyModule({
                 />
               </div>
 
+              {/* Money in and money out read from different lists — 工资 is not
+                  a member of the same vocabulary as 餐饮. `formTxType` is what
+                  decides, so the picker follows the 出/入 toggle above it. */}
               <div>
-                <label style={labelStyle}>Category</label>
-                <select
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <label style={labelStyle}>分类</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowCategoryManager(true)}
+                    style={{
+                      background: 'none', border: 'none', color: 'var(--color-money)',
+                      fontSize: '0.68rem', cursor: 'pointer', padding: 0,
+                    }}
+                  >
+                    管理分类
+                  </button>
+                </div>
+                <CategorySelect
+                  txType={formTxType}
                   value={formCategory}
-                  onChange={(e) => setFormCategory(e.target.value)}
+                  onChange={setFormCategory}
                   style={inputStyle}
-                >
-                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '5px' }}>
-                  Saving remembers this shop's category for next time.
-                </p>
+                />
+                {!formRefund && (
+                  <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '5px' }}>
+                    存了之后会记住这家店属于哪一类，下次自动填。
+                  </p>
+                )}
               </div>
 
               {/* WHICH INCOME SOURCE. The link that makes 「今天记收入」 and
@@ -1919,14 +2107,16 @@ export default function MoneyModule({
                       </div>
                     </div>
                     <div>
-                      <label style={{ ...labelStyle, fontSize: '0.7rem' }}>Category</label>
-                      <select
+                      <label style={{ ...labelStyle, fontSize: '0.7rem' }}>分类</label>
+                      {/* Always the expense list: the reader only ever offers
+                          to log a `spend` verdict — an income notification is
+                          reported, never turned into a record here. */}
+                      <CategorySelect
+                        txType="expense"
                         value={readerCategory}
-                        onChange={(e) => setReaderCategory(e.target.value)}
+                        onChange={setReaderCategory}
                         style={{ ...inputStyle, padding: '8px 10px', fontSize: '0.8rem' }}
-                      >
-                        {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
+                      />
                     </div>
 
                     {/* A pasted notification doesn't say which wallet it came
