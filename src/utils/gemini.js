@@ -143,7 +143,24 @@ export async function callGemini({ contents, system, maxOutputTokens = 300, json
     const body = await res.text().catch(() => '');
     // 429 is the one the user will actually hit, and "quota exceeded" in raw
     // JSON tells them nothing about what to do next.
-    if (res.status === 429) throw new Error('AI 太频繁被限流了，等一下再问');
+    //
+    // Google returns RESOURCE_EXHAUSTED for two completely different problems,
+    // and the advice for one is useless for the other:
+    //   · rate limited      — too many calls too fast. Waiting DOES fix it.
+    //   · credits depleted  — the billing account is empty. Waiting fixes
+    //                         nothing, ever, and 「等一下再问」 sends you off to
+    //                         retry forever against a wall.
+    // Only the body can tell them apart, so it decides the message.
+    //
+    // Refunded either way. The call never reached the model, and not refunding
+    // meant a depleted balance ALSO silently ate the 40-a-day local budget —
+    // one dead account turning into two separate lockouts.
+    if (res.status === 429) {
+      refundCall();
+      throw new Error(/deplet|billing|prepay/i.test(body)
+        ? 'Gemini 的余额用完了 — 到 ai.studio/projects 充值或开 billing。这不是等一下就会好的。'
+        : 'AI 太频繁被限流了，等一下再问');
+    }
     // 404 on this endpoint means the MODEL id no longer exists — Google retires
     // them, and an app in the field can't know that. Without naming it, this
     // arrived as `AI 请求失败 (404)` plus a wall of JSON, which reads like a
