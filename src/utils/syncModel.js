@@ -18,7 +18,11 @@ const PREFIX = 'lifemanager:';
 // it would only shuttle a dead conversation between devices forever. Old
 // `chats/{id}` documents already in Firestore are simply left where they are —
 // deleting a user's data to tidy up a schema is not this layer's call.
-export const RECORD_COLLECTIONS = ['meals', 'workouts', 'expenses', 'notes'];
+//
+// `supplementLog` is here rather than in a meta doc for the same 1 MiB reason:
+// six supplements taken daily is ~2,200 rows a year, and it is append-only, so
+// it is exactly the growth curve this split exists to handle.
+export const RECORD_COLLECTIONS = ['meals', 'workouts', 'expenses', 'notes', 'supplementLog'];
 
 /** Daily summaries, keyed by their own date so a re-run overwrites. */
 export const DAILY_STATS = 'dailyStats';
@@ -74,6 +78,22 @@ export const META_DOCS = {
   // constants and let an old device's stale copy overwrite a newer one's.
   // Only the user's deltas travel.
   moneyCategories: ['moneyCategoryPrefs'],
+  // The supplement shelf: a handful of products, edited on one device at a
+  // time, so pushing it whole is safe. The TAKEN LOG is not here — it grows
+  // without bound and lives in RECORD_COLLECTIONS above.
+  //
+  // `supplementsSeeded` travels WITH the list, deliberately. The seed only runs
+  // when the list is empty and the flag is false; if the flag were device-local,
+  // a second phone signing in before its first pull would seed its own copy of
+  // the same six bottles and the merge would leave twelve. Carried together,
+  // pulling the list also pulls the fact that seeding already happened.
+  supplements: ['supplements', 'supplementsSeeded'],
+  // Which sources may notify, the nudge times, the bill lead time. Its own
+  // document rather than a field on `settings`: it is written by one screen
+  // that has nothing to do with calorie targets, and a meta doc is pushed
+  // whole — filing it under `settings` would rewrite the diet profile every
+  // time a notification switch was flipped.
+  notifications: ['notificationSettings'],
 };
 
 /**

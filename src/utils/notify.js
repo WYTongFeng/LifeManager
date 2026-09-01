@@ -105,8 +105,20 @@ async function ensureChannel(p) {
   try {
     await p.createChannel({
       id: CHANNEL_ID,
-      name: '提醒 / 特别的日子',
-      description: '提醒事项与特别日子的通知',
+      // ONE channel for all five sources, not one each. Per-source channels
+      // would put the on/off switches in Android's settings, two levels deep
+      // and in a different language from the rest of the app — while the
+      // notification centre already has them, in context, next to what they
+      // control. The channel exists so there is a single OS-level switch for
+      // "LifeManager's scheduled notifications" that does not also silence the
+      // TNG capture work; splitting it further buys nothing.
+      //
+      // The ID MUST NOT CHANGE. Android treats a new id as a new channel with
+      // default settings, so anyone who had turned the sound down would find it
+      // back on. That is why it still says "reminders" after growing to cover
+      // supplements and bills.
+      name: '提醒 · 日子 · 补充剂 · 账单',
+      description: '提醒事项、特别日子、补充剂、账单到期与记录提醒',
       importance: 4,   // HIGH — makes a sound and appears as a heads-up
       visibility: 1,   // public: readable on the lock screen, which is the point
     });
@@ -131,10 +143,23 @@ function toNotification(item) {
       allowWhileIdle: true,
     },
     isExactNotification: false,
-    // Carried through to `localNotificationActionPerformed`, so tapping one can
-    // eventually open the thing it is about. Nothing consumes it yet; it costs
-    // nothing to put the identity in now rather than re-deriving it from text.
-    extra: { kind: item.kind, sourceId: item.sourceId, date: item.date },
+    // Read back by `useNotificationTaps` when the notification is tapped —
+    // `route` is a hash-router path and is what makes a tap land on the thing
+    // the notification is about instead of on whatever screen the app was last
+    // left on.
+    //
+    // This payload was written for two versions before anything read it (the
+    // comment here used to say "nothing consumes it yet"). `route` is the field
+    // that finished the job: without it the handler would have to re-derive a
+    // destination from `source` + `sourceId`, which is a second place that has
+    // to agree with the registry about where each source lives.
+    extra: {
+      source: item.source,
+      type: item.type,
+      sourceId: item.sourceId,
+      date: item.date,
+      route: item.route,
+    },
   };
 }
 

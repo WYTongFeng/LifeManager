@@ -46,8 +46,10 @@ export default function UpNextCard() {
 
       {rows.map(row => (
         <button
-          key={`${row.kind}:${row.sourceId}`}
-          onClick={() => navigate(row.kind === 'reminder' ? '/reminders' : '/special')}
+          key={`${row.source}:${row.sourceId}`}
+          // The row carries its own destination now, so this opens the actual
+          // reminder rather than its list — same deep link a notification uses.
+          onClick={() => navigate(row.route)}
           style={{
             display: 'flex', alignItems: 'center', gap: '8px',
             background: 'var(--bg-input)', border: '1px solid var(--border-glass)',
@@ -62,7 +64,7 @@ export default function UpNextCard() {
             </span>
             <span style={{
               display: 'block', fontSize: '0.66rem', marginTop: '1px',
-              color: row.kind === 'reminder' ? 'var(--color-remind)' : 'var(--color-special)',
+              color: row.source === 'reminder' ? 'var(--color-remind)' : 'var(--color-special)',
             }}>
               {row.when}{row.detail ? ` · ${row.detail}` : ''}
             </span>

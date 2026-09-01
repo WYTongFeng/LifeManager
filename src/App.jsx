@@ -4,7 +4,7 @@ import confetti from 'canvas-confetti';
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
 import Dashboard from './components/Dashboard';
-import DietModule from './components/DietModule';
+import NutritionModule from './components/NutritionModule';
 import SportsModule, { DEFAULT_ROUTINES } from './components/SportsModule';
 import { countSets } from './utils/workoutPlan';
 import MoneyModule from './components/MoneyModule';
@@ -13,6 +13,7 @@ import LifeHub from './components/LifeHub';
 import NotesModule from './components/NotesModule';
 import RemindersModule from './components/RemindersModule';
 import SpecialDaysModule from './components/SpecialDaysModule';
+import NotificationCenter from './components/NotificationCenter';
 import SurvivalBanner from './components/SurvivalBanner';
 import UpdateBanner from './components/UpdateBanner';
 import LoginGate from './components/LoginGate';
@@ -25,8 +26,9 @@ import { getCycle } from './utils/cycle';
 import { subscribe as subscribeSync, getState as getSyncState } from './utils/cloudSync';
 import { useAndroidBackButton } from './hooks/useAndroidBackButton';
 import { useTngCapture } from './hooks/useTngCapture';
-import { buildFeed } from './utils/upNext';
+import { buildFeed, centerGroups, normalizeNotificationSettings } from './utils/notifications';
 import { syncScheduled } from './utils/notify';
+import { useNotificationTaps } from './hooks/useNotificationTaps';
 
 /**
  * The banner strip under the header, per top-level route.
@@ -46,6 +48,7 @@ const HUD = {
   notes: ['📝 NOTES // 记事本', '随手记下 · 自动储存'],
   reminders: ['🔔 REMIND // 提醒事项', '一次 · 每天 · 每周 · 每月'],
   special: ['⭐ SPECIAL // 特别的日子', '生日 · 纪念日 · 倒数'],
+  alerts: ['🔔 ALERTS // 通知中心', '要知道的 · 要做的'],
 };
 
 // Rest-timer completion beep (A5 sine tone)
@@ -191,6 +194,10 @@ export default function App() {
   const location = useLocation();
   const activeTab = location.pathname.split('/')[1] || 'dashboard';
   useAndroidBackButton();
+  // Tapping a notification opens what it is about. See the hook — the payload
+  // to do this has been attached to every alarm since notifications shipped,
+  // and until now nothing read it.
+  useNotificationTaps();
   const [showExportModal, setShowExportModal] = useState(false);
   // The centre button's sheet. Lives here rather than in BottomNav because the
   // sheet has to render OUTSIDE the nav island's clipping and z-index, and
@@ -233,6 +240,21 @@ export default function App() {
   // only to keep the OS's alarm window in step — see the effect below.
   const reminders = useLiveJSON('reminders', []);
   const specialDays = useLiveJSON('specialDays', []);
+
+  // The other three notification sources, read for the same reason and in the
+  // same way: their screens own them, and this one only needs them to keep the
+  // alarm window honest. `allocations` is the recurring-bill list the money
+  // module already maintained — the due dates were always computed, nothing
+  // ever said them out loud until now.
+  const supplements = useLiveJSON('supplements', []);
+  const supplementLog = useLiveJSON('supplementLog', []);
+  const allocations = useLiveJSON('allocations', []);
+  const storedNotificationSettings = useLiveJSON('notificationSettings', null);
+  const tngReviewQueue = useLiveJSON('tngReviewQueue', []);
+  const notificationSettings = useMemo(
+    () => normalizeNotificationSettings(storedNotificationSettings),
+    [storedNotificationSettings],
+  );
 
   // resolveAccounts FIRST — `balance` is derived and never stored (see
   // accounts.js), so the raw array straight out of localStorage has no
@@ -438,32 +460,91 @@ export default function App() {
   // today's spend negative — see accounts.js.
   const totalSpendToday = sumBy(expenses.filter(isDailySpend), e => e.amount);
 
+  // Every one of these now carries a `route`, because they are rendered by the
+  // notification centre alongside things that can be opened — and a row you
+  // cannot tap sitting next to rows you can reads as broken rather than as
+  // informational. They were also written in English in an otherwise Chinese
+  // app, which is what happens to a surface nobody looks at.
   const alerts = [];
   if (totalCaloriesToday > calorieLimit) {
     alerts.push({
       id: 'calories',
       tone: 'bad',
-      text: `Over your calorie limit by ${totalCaloriesToday - calorieLimit} kcal.`,
+      route: '/diet',
+      text: `热量超了 ${totalCaloriesToday - calorieLimit} kcal`,
     });
   } else if (meals.length > 0 && totalCaloriesToday >= calorieLimit * 0.85) {
     alerts.push({
       id: 'calories-near',
       tone: 'warn',
-      text: `${calorieLimit - totalCaloriesToday} kcal left before you hit your limit.`,
+      route: '/diet',
+      text: `还剩 ${calorieLimit - totalCaloriesToday} kcal 就到上限`,
     });
   }
   if (totalSpendToday > dailyBudget) {
     alerts.push({
       id: 'budget',
       tone: 'bad',
-      text: `Over budget by RM ${(totalSpendToday - num(dailyBudget)).toFixed(2)}.`,
+      route: '/money',
+      text: `今天超预算 RM ${(totalSpendToday - num(dailyBudget)).toFixed(2)}`,
     });
   }
   // Expires after two minutes. This used to have no time component, so once a
   // rest finished the notification stayed in the bell indefinitely.
   if (restCompletedAt !== null && Date.now() - restCompletedAt < 120_000) {
-    alerts.push({ id: 'rest', tone: 'good', text: 'Rest complete — ready for your next set.' });
+    alerts.push({ id: 'rest', tone: 'good', route: '/sports', text: '休息完了 —— 可以下一组了' });
   }
+
+  // What the logging nudges need in order to know whether they have anything to
+  // say. Passed rather than read inside the nudge code on purpose: a nudge
+  // asserts that something is NOT logged, and the module that owns the records
+  // is the only one that can answer that honestly. A missing context produces no
+  // nudges at all rather than "nothing was logged" — see nudgeItems().
+  //
+  // `tngReviewQueue` is how 「有新的通知进来了」 is answered as honestly as this
+  // app can: the native listener queues payments while the WebView is asleep, so
+  // nothing can be announced at the moment one arrives; what CAN be said is that
+  // some are sitting there unconfirmed.
+  const nudgeContext = useMemo(() => ({
+    meals: allMeals,
+    expenses: allExpenses,
+    reviewQueueCount: Array.isArray(tngReviewQueue) ? tngReviewQueue.length : 0,
+  }), [allMeals, allExpenses, tngReviewQueue]);
+
+  /**
+   * What the notification centre shows, computed ONCE here.
+   *
+   * Both the bell's badge and the centre screen need it, and computing it in
+   * two places would let the number on the bell disagree with the list behind
+   * it — the single most annoying way for a badge to be wrong.
+   *
+   * DELIBERATELY A SECOND BUILD, separate from the one inside the scheduler
+   * effect below. They answer different questions: this one is "what should
+   * this render show", keyed on `today` so it moves when the date does; that
+   * one is "what should the OS hold RIGHT NOW", and must read the clock at the
+   * moment it runs. Sharing a memoized feed between them would hand the
+   * scheduler a feed built two days ago on resume, where every item is in the
+   * past — so it would cancel every alarm and schedule nothing.
+   */
+  const notificationGroups = useMemo(() => {
+    const now = Date.now();
+    const feed = buildFeed({
+      reminders, specialDays, supplements, supplementLog, allocations, cycle,
+      nudgeContext, settings: notificationSettings,
+      now, horizonDays: 60, perReminderLimit: 2,
+    });
+    return centerGroups({
+      feed, reminders, supplements, supplementLog,
+      nudgeContext, settings: notificationSettings, liveAlerts: alerts, now,
+    });
+    // `today` is a dependency the body doesn't name, on purpose: Date.now()
+    // reads the clock itself, so the date IS the cache key. The app is left
+    // open for days on Android — see storage.js's useToday.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    today, reminders, specialDays, supplements, supplementLog, allocations,
+    cycle, nudgeContext, notificationSettings, alerts.length,
+  ]);
 
   // History of past days' totals, used for the Overview trend chart & XP.
   // Starts empty — every entry here is a day you actually logged.
@@ -582,9 +663,16 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keep the OS holding alarms for the next 60 days of reminders and special
-  // days — see notify.js for why it's a rolling window rather than a repeating
-  // alarm, and upNext.js for why the ids make this cheap to re-run.
+  // Keep the OS holding alarms for the next 60 days of everything that can
+  // notify — see notify.js for why it's a rolling window rather than a repeating
+  // alarm, and notifications.js for why the ids make this cheap to re-run.
+  //
+  // THE DEPENDENCY LIST IS THE CANCELLATION MECHANISM. There is no "cancel this
+  // notification" call anywhere in this app. Ticking off a supplement, logging
+  // lunch, paying a bill or switching a source off all change something in this
+  // list; the feed is rebuilt without the item; notify.js sees an alarm the OS
+  // is holding that is no longer wanted, and cancels it. That is also why the
+  // nudges can promise never to fire for something already logged.
   //
   // Runs on every edit (the dependencies) AND on resume, which is the one that
   // matters: on Android the app is suspended for days at a time, so "the window
@@ -594,14 +682,19 @@ export default function App() {
   useEffect(() => {
     const run = () => {
       syncScheduled(buildFeed({
-        reminders, specialDays, now: Date.now(), horizonDays: 60, perReminderLimit: 4,
+        reminders, specialDays, supplements, supplementLog, allocations, cycle,
+        nudgeContext, settings: notificationSettings,
+        now: Date.now(), horizonDays: 60, perReminderLimit: 4,
       }));
     };
     run();
     const onVisible = () => { if (!document.hidden) run(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [reminders, specialDays]);
+  }, [
+    reminders, specialDays, supplements, supplementLog, allocations, cycle,
+    nudgeContext, notificationSettings,
+  ]);
 
   // Placed after every hook above (never conditionally skipping a hook call,
   // just short-circuiting the JSX) — see LoginGate.jsx for why this only
@@ -613,7 +706,10 @@ export default function App() {
   return (
     <div className="app-viewport">
       {/* Top Header Bar */}
-      <Header alerts={alerts} onOpenExport={() => setShowExportModal(true)} />
+      <Header
+        attentionCount={notificationGroups.attention.length}
+        onOpenExport={() => setShowExportModal(true)}
+      />
 
       {/* Above the survival banner deliberately: an update is a one-off action
           you take and dismiss, while survival mode is a condition that stays
@@ -658,8 +754,12 @@ export default function App() {
               />
             } />
 
-            <Route path="/diet" element={
-              <DietModule
+            {/* Two optional segments, same shape as /sports and /money:
+                /diet (food), /diet/supplements (the shelf),
+                /diet/supplements/:id (one product). See NutritionModule for why
+                supplements live behind this tab rather than in the Life Hub. */}
+            <Route path="/diet/:section?/:id?" element={
+              <NutritionModule
                 meals={meals}
                 setMeals={setMeals}
                 calorieLimit={calorieLimit}
@@ -667,6 +767,10 @@ export default function App() {
                 macroTargets={macroTargets}
                 setMacroTargets={setMacroTargets}
                 workouts={workouts}
+                // Logging a protein shake as food goes through the SAME setter
+                // the diet screen uses, so it lands in one list with one owner
+                // rather than in a second nutrition store. See asMealRecord().
+                onLogMeal={(record) => setMeals(prev => [record, ...prev])}
               />
             } />
 
@@ -706,6 +810,13 @@ export default function App() {
                 `/notes/new` is what the hub's tiles link to, so a tap lands
                 straight in an empty note rather than on a list with an Add
                 button. */}
+            {/* The notification centre. A real route, not a dropdown: it is
+                where a tapped notification lands when its own route no longer
+                exists, and being a route is what lets it be one. */}
+            <Route path="/alerts" element={
+              <NotificationCenter groups={notificationGroups} />
+            } />
+
             <Route path="/notes/:id?" element={<NotesModule />} />
             <Route path="/reminders/:id?" element={<RemindersModule />} />
             <Route path="/special/:id?" element={<SpecialDaysModule />} />

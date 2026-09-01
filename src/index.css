@@ -506,22 +506,6 @@ button:not(:disabled):active {
   border-color: var(--accent);
 }
 
-/* Notification Dropdown */
-.notif-dropdown {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  min-width: 230px;
-  background: rgba(22, 22, 30, 0.95);
-  backdrop-filter: blur(16px);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  padding: 0.85rem;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
-  z-index: 60;
-  animation: fadeIn 0.15s ease;
-}
-
 /* TNG Alert Banner */
 .tng-banner {
   background: var(--color-money-soft);

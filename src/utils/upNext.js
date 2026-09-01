@@ -1,116 +1,26 @@
-// One merged feed of "what is coming up", from reminders and special days.
+// The dashboard's view of what's coming up.
 //
-// It exists so there is exactly ONE answer to that question. The dashboard's
-// UP NEXT card and the OS notification scheduler are the same question asked
-// by two different consumers, and if each built its own list they would drift:
-// the card would show something the phone never announced, or the other way
-// round. Both read this.
+// WHAT MOVED, AND WHY
+// This file used to own `buildFeed` and `occurrenceId` as well, with the two
+// notification sources INLINED — a hand-written loop for reminders and another
+// for special days. Both are now in notifications.js, because a merge function
+// that names its sources has to be edited every time one is added, and there
+// are five of them now.
+//
+// What is left here is the part that was always view logic rather than
+// notification logic: the dashboard's UP NEXT card wants at most three rows,
+// one per source, mixing things that notify with things that don't. That is a
+// different question from "what alarms should the OS hold", and the difference
+// is the whole reason `upcomingSpecialDays` exists — see its comment.
 //
 // Pure — `now` is an argument, nothing here touches storage or Capacitor.
 
+import { describeWhen } from './reminders.js';
 import {
-  nextOccurrences, describeRepeat, describeWhen, normalizeReminders,
-} from './reminders.js';
-import {
-  notificationsFor, nextDate, daysUntil, describeCountdown, normalizeSpecialDays,
+  nextDate, daysUntil, describeCountdown, normalizeSpecialDays,
 } from './specialDays.js';
 import { todayStr } from './datetime.js';
-
-/**
- * A stable 31-bit id for one occurrence, derived from what it IS.
- *
- * Android notification ids are Java ints, so a millisecond timestamp won't fit
- * and a random id can't be recomputed. Deriving it from what the notification
- * says means the scheduler can compare against what the OS already holds and
- * act on the difference, instead of cancelling everything and re-scheduling on
- * every app open — which on a phone opened a dozen times a day is a lot of
- * alarm churn for no change.
- *
- * THE CONTENT IS PART OF THE KEY, not just kind+id+date. That is what makes an
- * EDIT work: rename a reminder and it hashes to a new id, so the stale alarm
- * falls out of the desired set and is cancelled while the new text is
- * scheduled. Keyed on identity alone, the OS would keep holding the old wording
- * and fire it — the edit would appear to save and then be silently ignored.
- *
- * FNV-1a, masked to 31 bits so it is always positive.
- */
-export function occurrenceId(kind, sourceId, dateKey) {
-  const s = `${kind}:${sourceId}:${dateKey}`;
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0) % 0x7fffffff;
-}
-
-/**
- * Everything due between `now` and the horizon, soonest first.
- *
- * `perReminderLimit` stops one daily reminder from filling the entire feed:
- * a 60-day window contains 60 of them, and "wake up" ×60 is not what the
- * dashboard's next-three should be showing, nor worth 60 OS alarms.
- *
- * @returns {{
- *   notifId: number, kind: 'reminder'|'special', sourceId: any,
- *   title: string, body: string, emoji: string, at: number, date: string,
- * }[]}
- */
-export function buildFeed({
-  reminders = [], specialDays = [], now = Date.now(),
-  horizonDays = 60, perReminderLimit = 4,
-} = {}) {
-  const out = [];
-  const today = todayStr(new Date(now));
-
-  for (const raw of normalizeReminders(reminders)) {
-    const occurrences = nextOccurrences(raw, { now, horizonDays, limit: perReminderLimit });
-    for (const o of occurrences) {
-      const title = raw.title || '提醒';
-      // The note if there is one, otherwise say what kind of repeat this is — a
-      // bare "提醒" notification with no second line tells you nothing you
-      // didn't already know from the title.
-      const body = raw.note?.trim() || describeRepeat(raw);
-      out.push({
-        notifId: occurrenceId('r', raw.id, `${o.date}|${o.time}|${title}|${body}`),
-        kind: 'reminder',
-        sourceId: raw.id,
-        title,
-        body,
-        emoji: '🔔',
-        at: o.at,
-        date: o.date,
-      });
-    }
-  }
-
-  for (const raw of normalizeSpecialDays(specialDays)) {
-    for (const o of notificationsFor(raw, { now, horizonDays })) {
-      const days = daysUntil(raw, todayStr(new Date(o.at)));
-      const title = `${raw.emoji} ${raw.title || '特别的日子'}`;
-      // Counted from the day the notification LANDS, not from today — a
-      // 1-week-before alert that says "还有 30 天" because it was scheduled a
-      // month ago is worse than useless.
-      const body = days === 0 ? '就是今天' : days === 1 ? '就是明天' : `还有 ${days} 天`;
-      out.push({
-        notifId: occurrenceId('s', raw.id, `${o.date}|${o.at}|${title}|${body}`),
-        kind: 'special',
-        sourceId: raw.id,
-        title,
-        body,
-        emoji: raw.emoji,
-        at: o.at,
-        date: o.date,
-      });
-    }
-  }
-
-  // Ties broken by id so the order is stable across renders — otherwise two
-  // things at the same minute swap places on every re-render.
-  return out
-    .sort((a, b) => a.at - b.at || a.notifId - b.notifId)
-    .map(item => ({ ...item, today }));
-}
+import { buildFeed } from './notifications.js';
 
 /** Local midnight at the start of a YYYY-MM-DD. Never Date.parse — that's UTC. */
 function midnightOf(dateStr) {
@@ -135,7 +45,7 @@ export function upcomingSpecialDays(specialDays, { now = Date.now(), withinDays 
     .sort((a, b) => a.days - b.days)
     .slice(0, limit)
     .map(({ s, days, date }) => ({
-      kind: 'special',
+      source: 'special',
       sourceId: s.id,
       title: s.title || '特别的日子',
       emoji: s.emoji,
@@ -147,31 +57,45 @@ export function upcomingSpecialDays(specialDays, { now = Date.now(), withinDays 
       sortAt: midnightOf(date),
       when: `${Number(date.split('-')[1])}月${Number(date.split('-')[2])}日`,
       detail: describeCountdown(s, today),
+      route: `/special/${s.id}`,
     }));
 }
 
 /**
  * The dashboard's compact list: the soonest few things of either kind.
  *
- * At most one row per source, so a daily reminder can't take all three slots —
- * "倒垃圾, 倒垃圾, 倒垃圾" is a worse card than no card.
+ * At most one row per source item, so a daily reminder can't take all three
+ * slots — 「倒垃圾, 倒垃圾, 倒垃圾」 is a worse card than no card.
+ *
+ * Deliberately still only reminders and special days, not the full five-source
+ * feed. The card is three rows on the densest screen in the app; adding
+ * supplement doses and bill warnings to it would turn a glance into a list, and
+ * the notification centre is now the place that shows everything.
  */
 export function upNextRows({ reminders = [], specialDays = [], now = Date.now(), limit = 3 } = {}) {
   const seen = new Set();
   const rows = [];
 
-  for (const item of buildFeed({ reminders, specialDays: [], now, horizonDays: 60, perReminderLimit: 1 })) {
-    if (seen.has(item.sourceId)) continue;
-    seen.add(item.sourceId);
+  const feed = buildFeed({
+    reminders, specialDays: [], now, horizonDays: 60, perReminderLimit: 1,
+    // Only the two always-on sources are wanted here, and both ignore settings.
+    settings: null,
+  });
+
+  for (const it of feed) {
+    if (it.source !== 'reminder') continue;
+    if (seen.has(it.sourceId)) continue;
+    seen.add(it.sourceId);
     rows.push({
-      kind: 'reminder',
-      sourceId: item.sourceId,
-      title: item.title,
+      source: 'reminder',
+      sourceId: it.sourceId,
+      title: it.title,
       emoji: '🔔',
-      date: item.date,
-      sortAt: item.at,
-      when: describeWhen(item.at, now),
+      date: it.date,
+      sortAt: it.at,
+      when: describeWhen(it.at, now),
       detail: '',
+      route: it.route,
     });
   }
 
@@ -179,3 +103,10 @@ export function upNextRows({ reminders = [], specialDays = [], now = Date.now(),
 
   return rows.sort((a, b) => a.sortAt - b.sortAt).slice(0, limit);
 }
+
+// Re-exported so `buildFeed` and the feed's identity function have exactly one
+// definition, in notifications.js, while the handful of existing importers of
+// this path keep working. Not a compatibility shim to be removed later — the
+// dashboard genuinely needs the feed, and importing it through the module it
+// already imports is one import instead of two.
+export { buildFeed, occurrenceId } from './notifications.js';

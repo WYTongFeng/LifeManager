@@ -91,7 +91,7 @@ check('the card shows at most `limit` rows', rows.length, 3);
 check('one row per source, however often it repeats',
   rows.filter(r => r.sourceId === 12).length, 1);
 check('both kinds appear together, in time order',
-  rows.map(r => `${r.kind}:${r.sourceId}`), ['reminder:12', 'reminder:11', 'special:21']);
+  rows.map(r => `${r.source}:${r.sourceId}`), ['reminder:12', 'reminder:11', 'special:21']);
 check('a reminder row says when it fires', rows[0].when, '今天 18:00');
 check('a special day row says its date', rows[2].when, '9月5日');
 

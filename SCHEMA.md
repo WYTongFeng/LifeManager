@@ -115,6 +115,33 @@ users/{uid}/
                        and pulled whole, so sharing one would let a reminder edited on the
                        phone clobber a note category edited on the PC.
 
+  meta/supplements     supplements[], supplementsSeeded                       (M56)
+                       { id, name, brand, category, form, perUnit{nutrientKey: amount},
+                         labelServing, unitsPerDose, servingNote, frequency, times['HH:MM'],
+                         notes, totalQuantity, remainingQuantity, lowStockDoses,
+                         startDate, endDate, remindEnabled, active, at, updatedAt }
+                       `perUnit` IS PER ONE UNIT, straight off the label — never a serving
+                       total. Every figure shown is `perUnit × unitsPerDose`, so a label
+                       printing "3 caplets: 333.33 mg calcium each" stores 333.33 and the
+                       screen says 1000. Storing 1000 would mean re-typing every number the
+                       moment the dose changed, and would disagree with its own label.
+                       Nutrient KEYS come from a fixed vocabulary (supplements.js), never
+                       labels: "Folate" on one bottle and "Folic Acid" on another must land
+                       on one key or the overlap between them is invisible.
+                       `supplementsSeeded` travels in the SAME document as the list, so a
+                       second device pulling the shelf also pulls the fact that seeding has
+                       already happened — otherwise it would seed its own six bottles before
+                       its first pull and the merge would leave twelve.
+  meta/notifications   notificationSettings                                     (M56)
+                       { enabled, supplements{enabled, lowStock},
+                         bills{enabled, daysBefore, time},
+                         nudges{ breakfast|lunch|dinner|money: {enabled, time} } }
+                       Which sources may notify. 提醒 and 特别的日子 have no switch: their
+                       entire job is to notify, and turning them off would leave two screens
+                       that quietly do nothing. Its own document rather than a field on
+                       `settings` — a meta doc is pushed whole, so filing it there would
+                       rewrite the diet profile every time a switch was flipped.
+
   meta/moneyCategories moneyCategoryPrefs { custom[], hidden[], renamed{} }        (M55)
                        The user's DELTAS only. The built-in 支出/支入 category lists ship in
                        code (moneyCategories.js) and are deliberately never synced — uploading
@@ -179,6 +206,17 @@ users/{uid}/
                        rows all saying "Untitled" is useless. A note with no title, no body
                        and no checklist text is DELETED rather than stored, so backing out of
                        an accidental 新建 leaves nothing behind. See notes.js.
+  supplementLog/{id}   { id, supplementId, date, time: 'HH:MM'|null, units,
+                         at, updatedAt }                                        (M56)
+                       A COLLECTION, not a meta doc: six supplements a day is ~2,200 rows a
+                       year, which is the 1 MiB growth curve above. Append-only — one row per
+                       dose actually taken. `units` is stored ON THE ROW rather than read back
+                       off the supplement, because changing tomorrow's dose must not rewrite
+                       what was swallowed last week. `time` says which of the day's scheduled
+                       slots it satisfies; null means an as-needed dose, which answers to no
+                       particular time. Deleting a supplement does NOT purge its log — it
+                       records what was actually taken, and finishing a bottle should not
+                       rewrite the history of having taken it.
   dailyStats/{date}    { date, totalCalories, calorieLimit, mealsLogged,
                          totalSets, totalExpense, dailyBudget }
 ```
@@ -373,6 +411,46 @@ the asset side is excluded. Folding that into `kind` would have been wrong.
 
 `packages[]` holds the Android notification package names bound to this account. It lives on the
 account rather than in a separate mapping table so backup, sync and restore carry it for free.
+
+### A supplement's numbers are per-unit; every total on screen is derived (M56)
+
+`perUnit` holds what ONE softgel / caplet / scoop contains, exactly as the bottle prints it.
+Nothing anywhere stores a serving total. The mineral bottle says "serving size: 3 caplets" and
+then lists 333.33 mg of calcium per caplet, so `perUnit.calcium = 333.33` and the screen shows
+1000 mg because `333.33 × 3` is 1000. Change the dose to 2 and it says 667.
+
+Storing the 1000 would be simpler and wrong in a specific way: it agrees with the label only at
+the one dose it was typed for, and there is nothing to notice when it stops agreeing. The same
+rule catches the creatine tub, where one 5 g teaspoon contains 2.5 g of creatine — the product's
+name is not the label, and `perUnit.creatine = 2.5`.
+
+**Nutrient keys are a fixed vocabulary, never labels.** Overlap detection compares keys, so
+"Folate" on the multivitamin and "Folic Acid" on the Niteworks tub have to resolve to one key
+(`folate`) or the 233 mcg they add up to is invisible. A key not in `NUTRIENTS` is discarded on
+read rather than stored, because an unknown key cannot be summed or compared with anything.
+
+**A nutrient that could not be read confidently off a label is absent, not zero and not guessed.**
+The multivitamin has a mineral column that was never transcribed and therefore has no minerals
+here. A guessed value is indistinguishable from a read one once stored, and would then be summed
+into an overlap warning as though someone had checked it.
+
+### Notifications are derived, never stored (M56)
+
+There is no notification table, no read/unread flag and no history. Everything the notification
+centre shows — and everything the OS is holding an alarm for — is computed from the records above
+by `buildFeed()`, on every render and every app resume.
+
+That is what makes cancellation work without a single cancel call anywhere in the app. Tick off a
+supplement, log lunch, pay a bill or switch a source off, and the item is simply absent from the
+next feed; `notify.js` compares the feed against what the OS already holds and cancels the
+difference. A stored notification list would be a second source of truth that goes stale the moment
+a reminder is edited on another device.
+
+Notification ids are **content-derived** (`occurrenceId`, FNV-1a masked to 31 bits — Android ids are
+Java ints). The content is part of the key, not just source + id + date: rename a reminder and it
+hashes to a new id, so the stale alarm falls out of the desired set and is cancelled while the new
+wording is scheduled. Keyed on identity alone, the OS would keep firing the old text and the edit
+would appear to save and then be silently ignored.
 
 ### There is no schema enforcement — this file and `META_DOCS` ARE the schema
 There's no migration system that fails loudly when a new `usePersistentState('someNewKey', …)` is

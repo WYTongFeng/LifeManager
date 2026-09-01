@@ -2,6 +2,149 @@
 
 Tracks progress toward turning the LifeManager mockup into a complete personal app. Updated as we go.
 
+## M56 — One notification system, and 补充剂 ✅ done
+
+The brief asked for a full audit before any code, on the assumption that notification logic had
+been scattered across modules. It hadn't. `notify.js` was already the single place that talks to
+the OS scheduler, with a rolling 60-day window, content-derived ids and an idempotent diff — no
+duplicate schedulers, no hardcoded ids, no per-module permission handling, no alarms surviving a
+delete. Most of the requested cleanup list did not apply, and saying so was more useful than
+inventing a rewrite.
+
+What the audit **did** find was four real things.
+
+### 1. Deep linking was written and never read
+Every alarm this app has ever scheduled carried `extra: { kind, sourceId, date }`, and nothing
+anywhere consumed it — the comment in `notify.js` said so out loud ("Nothing consumes it yet").
+So a 20:00 「交文件」 notification opened the app on whatever screen it was last left on, and
+finding the reminder was most of the work of acting on it.
+
+`useNotificationTaps` registers `localNotificationActionPerformed` and navigates. The payload now
+carries a `route` rather than the handler deriving one from `source`: a second place that has to
+agree with the registry about where each module lives would drift the first time a route was
+renamed, silently, because a wrong deep link looks like a working one until you tap it. An
+unrecognised route (an alarm scheduled by a previous APK) falls back to the notification centre
+instead of a blank screen.
+
+### 2. `buildFeed` named its sources
+It lived in `upNext.js` and had a hand-written loop for reminders and another for special days.
+Fine for exactly as long as there were two; every new notifying module after that is an edit to
+shared code that both existing ones depend on. It moved to `notifications.js` as a provider list —
+a source is a function returning items, and the merge does not know which sources exist. Five now:
+reminder, special, supplement, bill, nudge. `upNext.js` kept only what was always view logic (the
+dashboard's three-row card), and `test-upnext.mjs` passes unchanged apart from a `kind` → `source`
+rename.
+
+### 3. The header bell was a second, parallel notification concept
+`App.jsx` built an `alerts[]` array of three hard-coded conditions and `Header` rendered them in a
+dropdown that was **English in an otherwise Chinese app**, unrelated to anything the OS ever
+announced, and could not be tapped. It is the surface nobody looked at, which is how it stayed
+English. The three alerts were real and are kept — they are now one section of the notification
+centre, in Chinese, each with a route.
+
+### 4. Two dead exports waiting on a screen that was never built
+`cancelAllScheduled` had zero callers, and `MAX_SCHEDULED` was exported and never imported. Both
+existed for a settings surface that did not exist. 全部通知 now calls the first — without it,
+switching notifications off would stop new alarms while the OS kept every one it already held, up
+to 60 days of them from a feature the user had just turned off. The second is shown, but only once
+the window is actually full, because a limit you are nowhere near is noise.
+
+### 通知中心
+One route, `/alerts`, reached from the bell. Three sections — 需要注意 / 今天 / 接下来 — and no
+history, no read/unread, no archive. **Nothing is stored.** Every row is derived from the same
+records the scheduler reads, so the screen and the phone cannot disagree, and a row disappears when
+the thing behind it is dealt with rather than piling up as a log of buzzes you already saw.
+
+需要注意 is deliberately NOT computed from the alarm feed: an overdue reminder's moment has passed,
+so it has no future occurrence and is absent from the feed by construction. That is right for
+scheduling and wrong for a screen answering "what do I need to do", which is why the two are
+computed separately. It is also the only section that offers actions — tick off an overdue
+reminder, log a missed dose — because "I already did that" is the most common response to an
+overdue item, and opening the module to say it is three taps too many.
+
+接下来 de-duplicates against everything above it. Anything daily has an occurrence today and
+tomorrow and the day after; listed plainly, three real items filled the screen with nine rows
+saying the same words. Each row already carries 「每天」.
+
+### Which modules notify, and which deliberately do not
+| Module | Notifies | Why |
+|---|---|---|
+| 提醒 | ✅ always on | The module's entire job |
+| 特别的日子 | ✅ always on | Same |
+| 补充剂 | ⬜ opt-in, per product | New; off until switched on, twice (per product AND globally) |
+| 账单到期 | ⬜ opt-in | `recurring.js` already computed `nextDueDate`; nothing ever said it out loud |
+| 记录提醒 | ✅ 午餐/晚餐/记账 on, 早餐 off | Asked for by name |
+| 记事本 | ❌ | Has a checklist but no due-date concept. Nothing to fire |
+| 饮食 | ❌ (beyond the nudges) | No meal-schedule concept exists; adding one would be inventing a feature |
+| 健身 | ❌ | The rest timer is in-app audio; a phone alarm for a 60-second rest is worse |
+| 问 AI | ❌ | A clipboard export has no schedule |
+
+### 记录提醒: a notification that checks before it fires
+A reminder fires because a time arrived. A nudge fires because a time arrived AND something still
+isn't written down — a question about the data, not the calendar. Modelled as a reminder it would
+go off at 20:30 telling you to log dinner you logged at 19:00, which is how people learn to swipe
+everything away.
+
+It needs no new machinery. The condition is evaluated when the feed is built, and the feed is
+rebuilt on every data change; log dinner and the item is absent from the next feed, so the alarm
+the OS is holding is cancelled by the ordinary diff. The whole feature is a predicate.
+
+The horizon is **three days, not sixty** — nothing can be known about whether a future day is
+logged, and 60 days × 4 nudges would be 240 alarms against a 48-alarm budget, starving every real
+reminder.
+
+「有新的通知进来了」 is answered as honestly as this app can. The TNG listener is native and queues
+while the WebView is asleep, so no JS is running at the moment a payment lands and nothing can be
+announced then — keeping the app alive to try was already tried and abandoned. What it CAN do is
+fold the count into the daily 记账 nudge: 「自动记录到 3 笔，还没确认」.
+
+### 补充剂
+A tab inside 饮食 (`/diet/:section?/:id?`), not a fifth Life Hub tile — that sheet is documented as
+four and only four, and a launcher with five is a menu. Nutrition is also where it belongs: the
+protein powder's 24 g and 125 kcal are food.
+
+**The model is per-unit; every total is derived.** Every bottle states its numbers differently —
+the mineral one prints "serving size: 3 caplets" and then lists per caplet. `perUnit.calcium` is
+333.33 and the screen says 1000 because three of them contain that. Change the dose to 2 and it
+says 667, which no stored total could do. The same rule catches the creatine tub: one 5 g teaspoon
+contains **2.5 g** of creatine, and the product's name is not its label. And the fish oil's 758 mg
+of fish body oil is not 758 mg of omega-3 — EPA (185) and DHA (128) are listed separately, because
+the combined figure is the one people quote at each other.
+
+**Nothing is invented.** The multivitamin's second column of minerals was not legible in what was
+supplied, so it has none here. A guessed value is indistinguishable from a read one once stored,
+and would then be summed into an overlap warning as though someone had checked it.
+
+**Overlap detection states a fact and recommends nothing.** No upper limits, no RDA, nothing red,
+no suggestion to stop taking anything — those are clinical judgements this app cannot make, and a
+warning beside a number it cannot interpret is scarier and less useful than the number. It finds
+four real overlaps in this drawer: 叶酸 233 mcg, 牛磺酸 646 mg, 维生素 C 100 mg, 维生素 E 24.3 IU.
+The folate one only appears because "Folate" and "Folic Acid" resolve to ONE nutrient key; as two
+keys it would be invisible, which is why keys are a fixed vocabulary and never labels.
+
+Turmeric is offered as a template with its amounts left at **zero**, never seeded — the brief was
+explicit that it is something the user might add, not something the app decides he takes.
+
+Doses sharing a time become ONE notification (「3 个补充剂到时间了：鱼油、综合维他命、肌酸」).
+Four buzzes a minute apart is indistinguishable from spam even when every one is correct.
+
+Ticking off the protein powder ASKS whether to log it as food rather than assuming. It only ever
+appears for the two products with calories, and it asks because of double counting: if the shake
+was already logged by hand, writing it again makes the day read 125 kcal heavier with nothing on
+screen to explain it.
+
+### Deliberately not done
+No dashboard card. The overview is already the densest screen in the app and the rule about not
+growing it stands; the bell badge and 通知中心 cover it, and 饮食 → 补充剂 is one tap.
+
+### Files
+New: `notifications.js`, `nudges.js`, `supplements.js`, `supplementSeeds.js`,
+`useNotificationTaps.js`, `NotificationCenter.jsx`, `SupplementsModule.jsx`, `NutritionModule.jsx`,
+plus `test-notifications.mjs`, `test-nudges.mjs`, `test-supplements.mjs` (177 new checks).
+Removed: the header dropdown and its `.notif-dropdown` CSS.
+
+---
+
 ## M55 — 本月 = 日历月，还款只剩一个地方 ✅ done
 
 Two sentences of feedback on 1 Sep 2026, the morning the month turned:

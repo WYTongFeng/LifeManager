@@ -72,6 +72,7 @@ import {
   ChevronRight as PaChevronRight,
   ChevronDown as PaChevronDown,
   Label as PaLabel,
+  Inbox as PaInbox,
 } from 'pixelarticons/react';
 
 const wrap = (Icon) => {
@@ -155,6 +156,11 @@ export const Folder = wrap(PaFolder);
 export const ChevronRight = wrap(PaChevronRight);
 export const ChevronDown = wrap(PaChevronDown);
 export const Tag = wrap(PaLabel);
+
+// --- Supplements -----------------------------------------------------------
+// A container with something in it — used for the supplement shelf and for the
+// "running low" state, which is the only place stock is ever mentioned.
+export const Package = wrap(PaInbox);
 
 // No pixelarticons equivalent exists for these two — hand-drawn on the same 24x24 /
 // fill="currentColor" / flat-rect convention so they sit unnoticed among the rest.

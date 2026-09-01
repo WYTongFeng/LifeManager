@@ -1,11 +1,23 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Bell, Sparkles, ShieldCheck, AlertTriangle, Download } from '../utils/icons';
 import BackupModal from './BackupModal';
 import { daysSinceBackup } from '../utils/backup';
 import { subscribe, getState } from '../utils/cloudSync';
 
-export default function Header({ onOpenExport, alerts = [] }) {
-  const [notifOpen, setNotifOpen] = useState(false);
+/**
+ * `attentionCount` is what the bell shows, and it is NOT `alerts.length`.
+ *
+ * The bell used to count three hard-coded conditions computed in App.jsx and
+ * show them in a dropdown, in English, with nothing tappable in it. Those three
+ * were real but they were also the only things it knew about — an overdue
+ * reminder, a missed supplement or an unconfirmed payment never reached it. The
+ * count now comes from the notification centre's 需要注意 bucket, which is the
+ * same question asked properly, and tapping goes there instead of unfolding a
+ * panel that could not act on anything it displayed.
+ */
+export default function Header({ onOpenExport, attentionCount = 0 }) {
+  const navigate = useNavigate();
   const [backupOpen, setBackupOpen] = useState(false);
 
   // Nagging is the point: this data exists in exactly one browser until it has
@@ -130,67 +142,42 @@ export default function Header({ onOpenExport, alerts = [] }) {
             <Sparkles size={13} /> 问 AI
           </button>
 
-          <div style={{ position: 'relative' }}>
-            <button
-              onClick={() => setNotifOpen(!notifOpen)}
-              style={{
-                background: notifOpen ? 'var(--accent-soft)' : 'var(--bg-card)',
-                border: notifOpen ? '1px solid var(--accent)' : '1px solid var(--border-glass)',
-                color: 'var(--text-primary)',
-                width: '32px',
-                height: '32px',
-                borderRadius: '0px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                boxShadow: '1px 1px 0 #000'
-              }}
-            >
-              <Bell size={15} />
-              {alerts.length > 0 && (
-                <span style={{
-                  position: 'absolute', top: '-2px', right: '-2px',
-                  minWidth: '14px', height: '14px', padding: '0 3px',
-                  borderRadius: '0px', background: 'var(--color-accent-red)',
-                  color: 'white', fontSize: '0.55rem', fontWeight: '800',
-                  fontFamily: 'var(--font-pixel-retro)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  border: '1px solid #000'
-                }}>
-                  {alerts.length}
-                </span>
-              )}
-            </button>
-
-            {notifOpen && (
-              <div className="notif-dropdown">
-                <p style={{ fontSize: '0.8rem', fontWeight: '700', marginBottom: '6px' }}>Notifications</p>
-                {alerts.length === 0 ? (
-                  <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                    Nothing right now. You'll see alerts here when you pass your calorie limit or
-                    daily budget, or when a rest timer finishes.
-                  </p>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {alerts.map(a => (
-                      <div key={a.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '7px' }}>
-                        <span style={{
-                          marginTop: '5px', flexShrink: 0,
-                          width: '6px', height: '6px', borderRadius: '50%',
-                          background: a.tone === 'bad' ? 'var(--color-accent-red)'
-                            : a.tone === 'warn' ? 'var(--color-diet)' : 'var(--color-money)'
-                        }}></span>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-primary)', lineHeight: 1.4 }}>
-                          {a.text}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+          <button
+            onClick={() => navigate('/alerts')}
+            aria-label={attentionCount > 0 ? `通知中心 · ${attentionCount} 件要处理` : '通知中心'}
+            title="通知中心"
+            style={{
+              position: 'relative',
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border-glass)',
+              color: 'var(--text-primary)',
+              width: '32px',
+              height: '32px',
+              borderRadius: '0px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              boxShadow: '1px 1px 0 #000'
+            }}
+          >
+            <Bell size={15} />
+            {/* Only 需要注意 is counted. Something merely coming up is not a
+                task, and a badge that is never zero stops being a badge. */}
+            {attentionCount > 0 && (
+              <span style={{
+                position: 'absolute', top: '-2px', right: '-2px',
+                minWidth: '14px', height: '14px', padding: '0 3px',
+                borderRadius: '0px', background: 'var(--color-accent-red)',
+                color: 'white', fontSize: '0.55rem', fontWeight: '800',
+                fontFamily: 'var(--font-pixel-retro)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                border: '1px solid #000'
+              }}>
+                {attentionCount}
+              </span>
             )}
-          </div>
+          </button>
         </div>
       </header>
 
