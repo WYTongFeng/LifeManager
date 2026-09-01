@@ -27,7 +27,7 @@ lifemanager-*.json
 # release apk is tracked on purpose (below) so it's downloadable straight from
 # the repo; older/superseded ones stay untracked.
 *.apk
-!lifemanager-1.8.0.apk
+!lifemanager-1.8.1.apk
 
 # Editor directories and files
 .vscode/*
