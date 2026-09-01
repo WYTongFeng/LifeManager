@@ -8,7 +8,7 @@ import DietModule from './components/DietModule';
 import SportsModule, { DEFAULT_ROUTINES } from './components/SportsModule';
 import { countSets } from './utils/workoutPlan';
 import MoneyModule from './components/MoneyModule';
-import AiAssistantModal from './components/AiAssistantModal';
+import TextExportModal from './components/TextExportModal';
 import LifeHub from './components/LifeHub';
 import NotesModule from './components/NotesModule';
 import RemindersModule from './components/RemindersModule';
@@ -191,10 +191,10 @@ export default function App() {
   const location = useLocation();
   const activeTab = location.pathname.split('/')[1] || 'dashboard';
   useAndroidBackButton();
-  const [showAiModal, setShowAiModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
   // The centre button's sheet. Lives here rather than in BottomNav because the
   // sheet has to render OUTSIDE the nav island's clipping and z-index, and
-  // because one of its four actions opens the AI modal, which App owns.
+  // because one of its four actions opens the export modal, which App owns.
   const [hubOpen, setHubOpen] = useState(false);
 
   // A real front door on first launch, instead of the sign-in button being
@@ -613,7 +613,7 @@ export default function App() {
   return (
     <div className="app-viewport">
       {/* Top Header Bar */}
-      <Header alerts={alerts} onOpenAi={() => setShowAiModal(true)} />
+      <Header alerts={alerts} onOpenExport={() => setShowExportModal(true)} />
 
       {/* Above the survival banner deliberately: an update is a one-off action
           you take and dismiss, while survival mode is a condition that stays
@@ -653,7 +653,7 @@ export default function App() {
                 dailyBudget={dailyBudget}
                 history={history}
                 archivedXp={archivedXp}
-                onOpenAi={() => setShowAiModal(true)}
+                onOpenExport={() => setShowExportModal(true)}
                 onStartRestTimer={startRestTimer}
               />
             } />
@@ -730,20 +730,17 @@ export default function App() {
       <LifeHub
         open={hubOpen}
         onClose={() => setHubOpen(false)}
-        onOpenAi={() => setShowAiModal(true)}
+        onOpenExport={() => setShowExportModal(true)}
       />
 
-      {/* Floating AI Assistant Modal */}
-      {showAiModal && (
-        <AiAssistantModal
-          onClose={() => setShowAiModal(false)}
-          meals={meals}
-          calorieLimit={calorieLimit}
-          macroTargets={macroTargets}
-          workouts={workouts}
-          expenses={expenses}
-          dailyBudget={dailyBudget}
-        />
+      {/* What used to be the in-app AI Coach.
+          The coach called Gemini on every question, on prepaid credits that ran
+          out. This does the same job for nothing: it writes the same facts the
+          coach was fed — today, the week, the money — as plain text to paste
+          into whichever free AI chat is already on the phone. Takes no props,
+          because it reads straight from storage (see TextExportModal.jsx). */}
+      {showExportModal && (
+        <TextExportModal onClose={() => setShowExportModal(false)} />
       )}
     </div>
   );

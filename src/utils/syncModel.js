@@ -13,7 +13,12 @@ const PREFIX = 'lifemanager:';
  * year. As collections they also allow date-range queries and let one edit
  * write one document instead of rewriting everything.
  */
-export const RECORD_COLLECTIONS = ['meals', 'workouts', 'expenses', 'chats', 'notes'];
+// `chats` was here until the in-app AI Coach was removed (it called Gemini on
+// prepaid credits that ran out). Nothing writes that key any more, so syncing
+// it would only shuttle a dead conversation between devices forever. Old
+// `chats/{id}` documents already in Firestore are simply left where they are —
+// deleting a user's data to tidy up a schema is not this layer's call.
+export const RECORD_COLLECTIONS = ['meals', 'workouts', 'expenses', 'notes'];
 
 /** Daily summaries, keyed by their own date so a re-run overwrites. */
 export const DAILY_STATS = 'dailyStats';

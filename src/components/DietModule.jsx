@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Plus, AlertTriangle, Sparkles, Flame, Trash2, Utensils } from '../utils/icons';
+import React, { useState, useEffect } from 'react';
+import { ClipboardPaste, Copy, Plus, AlertTriangle, Sparkles, Flame, Trash2, Utensils } from '../utils/icons';
 import confetti from 'canvas-confetti';
 import { usePersistentState, useLiveJSON } from '../utils/storage';
 import { num, sumBy, newId } from '../utils/num';
@@ -7,9 +7,9 @@ import {
   calcBMR, calcCalorieTarget, calcEnergyBalance, suggestMacros,
   ACTIVITY_LEVELS, DIET_GOALS, DEFAULT_ACTIVITY, DEFAULT_GOAL,
 } from '../utils/calories';
-import { isAiConfigured, getCallsRemainingToday } from '../utils/gemini';
 import { lookupFood, searchFoods } from '../utils/foodDb';
-import { estimateFoodFromText, estimateFoodFromPhoto, sumItems, scaleItem } from '../utils/foodEstimate';
+import { estimateFoodFromText, sumItems, scaleItem } from '../utils/foodEstimate';
+import { AI_FOOD_PROMPT, parsePastedFood } from '../utils/foodPaste';
 import { nowTimeStr } from '../utils/datetime';
 
 /** Guess the meal slot from the clock, so the user rarely has to change it. */
@@ -23,8 +23,7 @@ function currentMealCategory(now = new Date()) {
 
 export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLimit, macroTargets, setMacroTargets, workouts = [] }) {
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showAiCamera, setShowAiCamera] = useState(false);
-  const [analyzingPhoto, setAnalyzingPhoto] = useState(false);
+  const [showPasteModal, setShowPasteModal] = useState(false);
   const [editingMealId, setEditingMealId] = useState(null);
   const [customFoodName, setCustomFoodName] = useState('');
   const [customCalories, setCustomCalories] = useState('');
@@ -33,9 +32,10 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
   const [customCarbs, setCustomCarbs] = useState('');
   const [customFat, setCustomFat] = useState('');
 
-  // Where the numbers in the form came from: 'local' | 'ai' | null (typed).
+  // Where the numbers in the form came from: 'local' | 'paste' | null (typed).
   // Shown to the user and stored on the meal, because an AI guess and a
-  // hand-weighed figure deserve different levels of trust later.
+  // hand-weighed figure deserve different levels of trust later. 'ai' still
+  // appears on meals logged by builds that called the API directly.
   const [estimateSource, setEstimateSource] = useState(null);
   const [estimateNote, setEstimateNote] = useState('');
   const [estimating, setEstimating] = useState(false);
@@ -48,13 +48,12 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
   const [confidence, setConfidence] = useState(null);
   const [newItemName, setNewItemName] = useState('');
 
-  const [photoPreview, setPhotoPreview] = useState(null);
-  const [photoError, setPhotoError] = useState('');
-  const [photoHint, setPhotoHint] = useState('');
-  const fileInputRef = useRef(null);
-
-  const aiReady = isAiConfigured();
-  const aiCallsLeft = aiReady ? getCallsRemainingToday() : 0;
+  // The paste-from-an-outside-AI flow (see foodPaste.js). `promptCopied` is
+  // the only feedback that the copy worked — on Android nothing else on screen
+  // changes when the clipboard is written.
+  const [pasteText, setPasteText] = useState('');
+  const [pasteError, setPasteError] = useState('');
+  const [promptCopied, setPromptCopied] = useState(false);
 
   // Live suggestions from the offline table as the user types a name.
   const nameSuggestions = customFoodName.trim() && !estimateSource ? searchFoods(customFoodName, 4) : [];
@@ -160,17 +159,13 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
     ]);
   };
 
-  /**
-   * Look up whatever the user typed. Free table hit if we have one, otherwise
-   * one AI call — and `forceAi` lets them override a table match they disagree
-   * with ("my nasi lemak came with two eggs").
-   */
-  const handleEstimateFromText = async ({ forceAi = false } = {}) => {
+  /** Look up whatever the user typed in the offline table. Free, instant. */
+  const handleEstimateFromText = () => {
     if (!customFoodName.trim() || estimating) return;
     setEstimating(true);
     setEstimateError('');
     try {
-      applyEstimate(await estimateFoodFromText(customFoodName, { forceAi }));
+      applyEstimate(estimateFoodFromText(customFoodName));
     } catch (err) {
       setEstimateError(err.message);
     } finally {
@@ -178,30 +173,43 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
     }
   };
 
-  /** Camera/gallery pick -> vision estimate -> prefilled review form. */
-  const handlePhotoPicked = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = ''; // let the same file be picked again after a retry
-    if (!file) return;
-
-    setPhotoError('');
-    setAnalyzingPhoto(true);
-    const previewUrl = URL.createObjectURL(file);
-    setPhotoPreview(previewUrl);
-
+  /** Hand the outside AI the exact prompt, so its reply parses on the way back. */
+  const handleCopyPrompt = async () => {
     try {
-      const est = await estimateFoodFromPhoto(file, photoHint);
-      // Straight into the edit form rather than the log: a vision estimate is
-      // a starting point the user should see and correct, not a fact.
-      applyEstimate(est);
+      await navigator.clipboard.writeText(AI_FOOD_PROMPT);
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 2500);
+    } catch {
+      // Clipboard access can be refused outright in a WebView. Rather than a
+      // dead button, select the prompt so a long-press copy still works — same
+      // fallback as TextExportModal.
+      setPasteError('复制不了 — 长按下面灰色框里的文字自己复制');
+      const box = document.getElementById('food-prompt-text');
+      if (box) {
+        const range = document.createRange();
+        range.selectNodeContents(box);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }
+  };
+
+  /** Pasted reply -> component breakdown -> prefilled review form. */
+  const handleParsePaste = () => {
+    setPasteError('');
+    try {
+      // Straight into the edit form rather than the log: an estimate written by
+      // a model that never saw the plate is a starting point to correct, not a
+      // fact. Same rule the vision call followed before it was removed.
+      applyEstimate(parsePastedFood(pasteText));
       setCustomCategory(currentMealCategory());
       setEditingMealId(null);
-      setShowAiCamera(false);
+      setShowPasteModal(false);
+      setPasteText('');
       setShowAddModal(true);
     } catch (err) {
-      setPhotoError(err.message);
-    } finally {
-      setAnalyzingPhoto(false);
+      setPasteError(err.message);
     }
   };
 
@@ -246,9 +254,10 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
         category: customCategory,
         time: nowTimeStr(),
         // `source` records how the numbers were obtained; aiDetected stays for
-        // meals logged by older builds that only had that flag.
+        // meals logged by older builds that only had that flag — and a pasted
+        // estimate IS an AI estimate as far as that flag ever meant anything.
         source: estimateSource,
-        aiDetected: estimateSource === 'ai',
+        aiDetected: estimateSource === 'ai' || estimateSource === 'paste',
         items: breakdown,
       };
       setMeals([newMeal, ...meals]);
@@ -273,9 +282,8 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
     setItems([]);
     setConfidence(null);
     setNewItemName('');
-    if (photoPreview) URL.revokeObjectURL(photoPreview);
-    setPhotoPreview(null);
-    setPhotoHint('');
+    setPasteText('');
+    setPasteError('');
   };
 
   const handleOpenAddModal = () => {
@@ -317,10 +325,10 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2 style={{ fontSize: '1.4rem', fontWeight: '800' }}>Diet Control</h2>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>AI Food Scanner & Daily Budget</p>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Food Log & Daily Budget</p>
         </div>
         <button
-          onClick={() => setShowAiCamera(true)}
+          onClick={() => setShowPasteModal(true)}
           style={{
             background: 'var(--color-diet)',
             color: 'var(--color-diet-ink)',
@@ -335,7 +343,7 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
             gap: '0.5rem'
           }}
         >
-          <Camera size={16} /> Scan Meal
+          <ClipboardPaste size={16} /> 贴 AI 结果
         </button>
       </div>
 
@@ -678,11 +686,11 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
           <div className="glass-card" style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-secondary)' }}>
             <p style={{ fontSize: '0.85rem' }}>No meals logged today yet.</p>
             <button
-              onClick={() => setShowAiCamera(true)}
+              onClick={() => setShowPasteModal(true)}
               className="btn-primary"
               style={{ margin: '1rem auto 0 auto', fontSize: '0.8rem' }}
             >
-              <Camera size={16} /> Scan Meal with AI
+              <ClipboardPaste size={16} /> 问 AI · 贴结果
             </button>
           </div>
         ) : (
@@ -708,7 +716,9 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
                     <span>{meal.category}</span>
                     <span>•</span>
                     <span>{meal.time}</span>
-                    {(meal.source ?? (meal.aiDetected ? 'ai' : null)) === 'ai' && (
+                    {/* 'ai' is the old in-app API call, 'paste' the outside chat.
+                        Both are a model's guess, so both read the same here. */}
+                    {['ai', 'paste'].includes(meal.source ?? (meal.aiDetected ? 'ai' : null)) && (
                       <span style={{ color: 'var(--color-diet)' }}>• AI 估算</span>
                     )}
                     {meal.source === 'local' && (
@@ -735,120 +745,113 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
         )}
       </div>
 
-      {/* AI Photo Scanner — a real vision call on a real photo. */}
-      {showAiCamera && (
-        <div className="modal-overlay" onClick={() => !analyzingPhoto && setShowAiCamera(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ fontSize: '1.1rem', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                <Sparkles size={20} color="var(--color-diet)" /> 拍照估算热量
+      {/* 问外面的 AI，把结果贴回来.
+          This replaced a real vision API call. The app no longer pays anyone:
+          the estimate is done by whichever free chat app is already on the
+          phone, and all this screen does is hand over the right prompt and
+          read the reply back. See foodPaste.js. */}
+      {showPasteModal && (
+        <div className="modal-overlay" onClick={() => setShowPasteModal(false)}>
+          <div
+            className="modal-content"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxHeight: '88vh', overflowY: 'auto' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <ClipboardPaste size={20} color="var(--color-diet)" /> 问 AI · 贴结果
               </h3>
               <button
-                onClick={() => setShowAiCamera(false)}
-                disabled={analyzingPhoto}
-                style={{ background: 'none', border: 'none', color: 'white', cursor: analyzingPhoto ? 'default' : 'pointer', opacity: analyzingPhoto ? 0.4 : 1 }}
+                onClick={() => setShowPasteModal(false)}
+                style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer' }}
               >✕</button>
             </div>
 
-            {!aiReady ? (
-              <p className="demo-note">
-                AI 估算还没设置好 —— 需要在 <code>.env.local</code> 里填上{' '}
-                <code>VITE_GEMINI_API_KEY</code>。在那之前请用 <strong>Manual Log</strong>{' '}
-                手动记录，本地食物资料库仍然可以帮你自动填热量。
+            <ol style={{
+              fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: '1.6',
+              paddingLeft: '1.1rem', margin: '0 0 0.9rem 0', display: 'flex',
+              flexDirection: 'column', gap: '3px'
+            }}>
+              <li>点下面「复制提示词」</li>
+              <li>打开任何免费的 AI 聊天（ChatGPT、Gemini、DeepSeek 都行），把提示词<strong>连食物照片一起</strong>发过去</li>
+              <li>它回一个表格 → 全选复制 → 贴到下面，点「读取」</li>
+            </ol>
+
+            <button
+              type="button"
+              onClick={handleCopyPrompt}
+              style={{
+                width: '100%', padding: '10px', border: 'none',
+                borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                background: promptCopied ? 'var(--color-money)' : 'var(--color-diet)',
+                color: promptCopied ? 'var(--color-money-ink, #000)' : 'var(--color-diet-ink)',
+                fontSize: '0.85rem', fontWeight: '700',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+              }}
+            >
+              <Copy size={15} /> {promptCopied ? '已复制 — 去 AI 那边贴上' : '复制提示词'}
+            </button>
+
+            {/* Kept on screen rather than hidden behind the button: when the
+                clipboard is refused (it can be, in a WebView) this is the only
+                way to get the text out, and it also lets him see what he is
+                about to send before sending it. */}
+            <pre
+              id="food-prompt-text"
+              style={{
+                marginTop: '8px', maxHeight: '110px', overflowY: 'auto',
+                background: 'var(--bg-card)', border: '1px solid var(--border-glass)',
+                borderRadius: 'var(--radius-sm)', padding: '8px 10px',
+                fontSize: '0.62rem', lineHeight: '1.5', color: 'var(--text-muted)',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word', userSelect: 'text',
+              }}
+            >{AI_FOOD_PROMPT}</pre>
+
+            <div style={{ marginTop: '1rem' }}>
+              <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                把 AI 的回答贴在这里
+              </label>
+              <textarea
+                value={pasteText}
+                onChange={(e) => { setPasteText(e.target.value); setPasteError(''); }}
+                rows={6}
+                placeholder={'白饭 | 一碗 | 200 | 4 | 45 | 0\n炸鸡 | 一块 | 250 | 20 | 8 | 16'}
+                style={{
+                  width: '100%', padding: '10px 12px', marginTop: '4px',
+                  borderRadius: 'var(--radius-sm)', background: 'var(--bg-input)',
+                  border: '1px solid var(--border-glass)', color: 'white',
+                  fontSize: '0.8rem', lineHeight: '1.5', resize: 'vertical',
+                  fontFamily: 'inherit',
+                }}
+              />
+            </div>
+
+            {pasteError && (
+              <p style={{ fontSize: '0.72rem', color: 'var(--color-accent-red)', marginTop: '6px', lineHeight: '1.5' }}>
+                {pasteError}
               </p>
-            ) : (
-              <>
-                <p style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: '1.5', marginBottom: '0.85rem' }}>
-                  拍一张你正要吃的食物，AI 会把盘里每一样<strong>分开列出来</strong>，
-                  填进表单让你确认后再记录。
-                </p>
-                <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: '1.5', marginBottom: '0.85rem' }}>
-                  杂菜饭这类一盘好几道菜的，AI 认不了那么准 —— 但它会列成一项一项，
-                  你改分量、删错的、补漏的，比重拍快得多。
-                </p>
-
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={handlePhotoPicked}
-                  style={{ display: 'none' }}
-                />
-
-                <div
-                  className="tap-zone"
-                  onClick={() => !analyzingPhoto && fileInputRef.current?.click()}
-                  style={{
-                    height: '200px',
-                    borderRadius: 'var(--radius-lg)',
-                    background: 'var(--bg-card)',
-                    border: '2px dashed var(--border-strong)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '12px',
-                    textAlign: 'center',
-                    cursor: analyzingPhoto ? 'default' : 'pointer',
-                    overflow: 'hidden',
-                    position: 'relative'
-                  }}>
-                  {photoPreview && (
-                    <img
-                      src={photoPreview}
-                      alt=""
-                      style={{
-                        position: 'absolute', inset: 0, width: '100%', height: '100%',
-                        objectFit: 'cover', opacity: analyzingPhoto ? 0.35 : 0.6
-                      }}
-                    />
-                  )}
-                  {analyzingPhoto ? (
-                    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                      <div className="pulse-badge" style={{ width: '24px', height: '24px', background: 'var(--color-diet)' }}></div>
-                      <p style={{ fontSize: '0.85rem', color: 'var(--color-diet)', fontWeight: '600' }}>AI 正在辨认食物与分量…</p>
-                    </div>
-                  ) : (
-                    <div style={{ position: 'relative' }}>
-                      <Camera size={36} color="var(--color-diet)" style={{ marginBottom: '8px' }} />
-                      <p style={{ fontSize: '0.85rem', fontWeight: '600' }}>点这里拍照或选图</p>
-                      <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                        今天还剩 {aiCallsLeft} 次 AI 额度
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                {photoError && (
-                  <p style={{ fontSize: '0.75rem', color: 'var(--color-accent-red)', marginTop: '10px' }}>
-                    {photoError}
-                  </p>
-                )}
-
-                <div style={{ marginTop: '1rem' }}>
-                  <label style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                    补充说明（可留空，能明显提高准确度）
-                  </label>
-                  <input
-                    type="text"
-                    value={photoHint}
-                    onChange={(e) => setPhotoHint(e.target.value)}
-                    placeholder="例：三样菜、饭是大份、炸鸡不是烤的"
-                    style={{
-                      width: '100%', padding: '9px 12px', marginTop: '4px',
-                      borderRadius: 'var(--radius-sm)', background: 'var(--bg-input)',
-                      border: '1px solid var(--border-glass)', color: 'white', fontSize: '0.8rem'
-                    }}
-                  />
-                </div>
-
-                <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.85rem', lineHeight: '1.5' }}>
-                  想省额度的话，直接用 <strong>Manual Log</strong> 打食物名字 ——
-                  常见的马来西亚食物本地资料库里就有，不用花 AI 次数。
-                </p>
-              </>
             )}
+
+            <button
+              type="button"
+              onClick={handleParsePaste}
+              disabled={!pasteText.trim()}
+              style={{
+                width: '100%', marginTop: '10px', padding: '11px', border: 'none',
+                borderRadius: 'var(--radius-sm)', background: 'var(--accent)',
+                color: 'var(--accent-ink, #000)', fontSize: '0.88rem', fontWeight: '700',
+                cursor: pasteText.trim() ? 'pointer' : 'default',
+                opacity: pasteText.trim() ? 1 : 0.45,
+              }}
+            >
+              读取 → 填进表单
+            </button>
+
+            <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.9rem', lineHeight: '1.5' }}>
+              读出来的每一项还可以改分量、删掉、补漏 —— 杂菜饭这种一盘好几道菜的，
+              改比重问一次准得多。常见的马来西亚食物<strong>本地资料库里就有</strong>，
+              直接用 Manual Log 打名字，连出去问都不用。
+            </p>
           </div>
         </div>
       )}
@@ -894,7 +897,7 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
                     type="button"
                     onClick={() => handleEstimateFromText()}
                     disabled={!customFoodName.trim() || estimating}
-                    title="先查本地资料库，查不到才用 AI"
+                    title="查本地资料库（免费、离线）"
                     style={{
                       background: 'var(--color-diet)', color: 'var(--color-diet-ink)',
                       border: 'none', padding: '0 14px', borderRadius: 'var(--radius-sm)',
@@ -939,20 +942,19 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
                       color: estimateSource === 'local' ? 'var(--color-money)' : 'var(--color-diet)',
                       border: `1px solid ${estimateSource === 'local' ? 'var(--color-money)' : 'var(--color-diet)'}`,
                     }}>
-                      {estimateSource === 'local' ? '本地资料库 · 免费' : 'AI 估算'}
+                      {estimateSource === 'local' ? '本地资料库 · 免费' : 'AI 估算 · 请核对'}
                       {estimateNote ? ` · ${estimateNote}` : ''}
                     </span>
-                    {estimateSource === 'local' && aiReady && (
+                    {estimateSource === 'local' && (
                       <button
                         type="button"
-                        onClick={() => handleEstimateFromText({ forceAi: true })}
-                        disabled={estimating}
+                        onClick={() => { setPasteError(''); setShowPasteModal(true); }}
                         style={{
                           background: 'none', border: 'none', color: 'var(--text-muted)',
                           fontSize: '0.68rem', textDecoration: 'underline', cursor: 'pointer'
                         }}
                       >
-                        分量不一样？用 AI 重估
+                        分量不一样？问 AI
                       </button>
                     )}
                   </div>
@@ -1065,7 +1067,7 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
                   </div>
 
                   <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '6px', lineHeight: '1.5' }}>
-                    杂菜饭这类多菜的盘子，AI 只能认个大概 —— 改分量、删错项比重拍一张准得多。
+                    杂菜饭这类多菜的盘子，AI 只能认个大概 —— 改分量、删错项比重问一次准得多。
                     下面的总数会跟着这里自动更新。
                   </p>
                 </div>

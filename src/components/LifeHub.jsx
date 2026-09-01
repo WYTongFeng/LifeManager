@@ -27,14 +27,14 @@ const ACTIONS = [
   },
   {
     key: 'ai',
-    // The only one that isn't a route: the assistant has always been a modal
-    // over whatever you were looking at, and it reads your current screen's
-    // data. Making it a page would take that context away.
+    // The only one that isn't a route: it hands your data to the clipboard for
+    // whichever AI chat you use, over whatever you were looking at. Making it a
+    // page would put a screen in front of a two-tap action.
     modal: 'ai',
     Icon: Sparkles,
     emoji: '🤖',
-    label: 'AI 助手',
-    hint: '问它任何事',
+    label: '问 AI',
+    hint: '复制数据去问',
     color: 'var(--accent)',
     soft: 'var(--accent-soft)',
   },
@@ -60,7 +60,7 @@ const ACTIONS = [
   },
 ];
 
-export default function LifeHub({ open, onClose, onOpenAi }) {
+export default function LifeHub({ open, onClose, onOpenExport }) {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -90,7 +90,7 @@ export default function LifeHub({ open, onClose, onOpenAi }) {
     // Closed FIRST, so the sheet is already gone as the new screen animates in
     // rather than fading out on top of it.
     onClose();
-    if (action.modal === 'ai') onOpenAi();
+    if (action.modal === 'ai') onOpenExport();
     else navigate(action.to);
   };
 

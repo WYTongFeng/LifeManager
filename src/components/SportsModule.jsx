@@ -34,7 +34,12 @@ import { nowTimeStr } from '../utils/datetime';
 const WeightTrendChart = lazy(() => import('./WeightTrendChart'));
 
 // Same modal the money side and 备份 use — it covers both reports.
-const TextExportModal = lazy(() => import('./TextExportModal'));
+//
+// A plain import, not lazy(): App.jsx now imports it statically too (it is what
+// the header's 问 AI button opens, since the in-app coach was removed), so it
+// is in the main chunk regardless and a dynamic import here only makes the
+// bundler warn that the split is ineffective.
+import TextExportModal from './TextExportModal';
 
 // The routines themselves now live in utils/workoutRoutines.js — the real
 // 4-day split the user actually trains, in a gym version and a no-equipment
@@ -1942,9 +1947,7 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
       )}
 
       {showTextExport && (
-        <Suspense fallback={null}>
-          <TextExportModal onClose={() => setShowTextExport(false)} />
-        </Suspense>
+        <TextExportModal onClose={() => setShowTextExport(false)} />
       )}
 
       {/* Add Routine Modal */}

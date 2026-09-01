@@ -29,7 +29,7 @@ cheaper as one document than as many.
 | | Kind | Why |
 |---|---|---|
 | `meta/*` | **document** | Small, bounded, read together on startup — one read |
-| `meals`, `workouts`, `expenses`, `chats`, `dailyStats` | **collection** | Grow forever; need date-range queries; per-item writes |
+| `meals`, `workouts`, `expenses`, `notes`, `dailyStats` | **collection** | Grow forever; need date-range queries; per-item writes |
 
 A collection has a per-record merge to fall back on; a `meta/*` document does not, and that
 asymmetry has teeth in both directions:
@@ -164,11 +164,11 @@ users/{uid}/
                                                           you paying a creditor). Excluded from
                                                           spentThisCycle — see debts.js.
                        + { isAccountTransfer, transferId } half of a transfer pair
-  chats/{id}           { id, sender: 'user'|'ai', text, at }
-                       `id` is required, not optional: diffCollection() drops any record without
-                       one, so before messages carried an id this collection silently never
-                       synced at all. The greeting uses the fixed id 'greeting' so two devices
-                       agree it is the same message.
+  (chats/{id})         REMOVED. The in-app AI Coach called Gemini on prepaid credits that ran
+                       out, so it was deleted and replaced by the plain-text export you paste
+                       into a free AI chat yourself. Nothing writes this key any more and it is
+                       no longer in RECORD_COLLECTIONS; documents already in Firestore are left
+                       where they are rather than deleted.
   notes/{id}           { id, title, body, category, pinned, archived,
                          checklist[{ id, text, done }], date, at, updatedAt }
                        A COLLECTION, not a meta doc, for the 1 MiB reason above: notes are
@@ -427,7 +427,6 @@ the XP calculation both depend on that being stable.
 |---|---|
 | meals, workouts, expenses | Everything. ~1–2 KB/day — years fit comfortably. |
 | dailyStats | Everything. ~100 bytes/day ≈ 36 KB/year. |
-| chats | Last 200 messages. Unbounded, and old chat has little value. |
 
 `archivedXp` in `meta/gamification` is now vestigial — history is no longer capped at 30 days, so
 nothing ages out. It's still read so that anyone who already accumulated a value keeps their level.

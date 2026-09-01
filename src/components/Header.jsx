@@ -4,7 +4,7 @@ import BackupModal from './BackupModal';
 import { daysSinceBackup } from '../utils/backup';
 import { subscribe, getState } from '../utils/cloudSync';
 
-export default function Header({ onOpenAi, alerts = [] }) {
+export default function Header({ onOpenExport, alerts = [] }) {
   const [notifOpen, setNotifOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
 
@@ -111,7 +111,7 @@ export default function Header({ onOpenAi, alerts = [] }) {
             </button>
           )}
           <button
-            onClick={onOpenAi}
+            onClick={onOpenExport}
             style={{
               background: 'var(--accent-soft)',
               border: '1px solid var(--accent)',
@@ -127,7 +127,7 @@ export default function Header({ onOpenAi, alerts = [] }) {
               boxShadow: '1px 1px 0 #000'
             }}
           >
-            <Sparkles size={13} /> AI Coach
+            <Sparkles size={13} /> 问 AI
           </button>
 
           <div style={{ position: 'relative' }}>

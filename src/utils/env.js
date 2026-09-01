@@ -7,12 +7,13 @@
 // anything and `import.meta.env` is simply `undefined`.
 //
 // That is fatal rather than merely awkward, because these reads happen at
-// MODULE SCOPE. `test-foodestimate.mjs` imports foodEstimate.js, which imports
-// gemini.js, which read a key straight off `import.meta.env` on the way up; the
-// TypeError landed during import, before a single assertion ran, and killed the
-// process. package.json's `test` script is one long `&&` chain, so that took
-// the last two suites down with it — they passed fine when run on their own,
-// which is exactly why it went unnoticed.
+// MODULE SCOPE. `test-foodestimate.mjs` imported foodEstimate.js, which imported
+// the old gemini.js, which read a key straight off `import.meta.env` on the way
+// up; the TypeError landed during import, before a single assertion ran, and
+// killed the process. package.json's `test` script is one long `&&` chain, so
+// that took the last two suites down with it — they passed fine when run on
+// their own, which is exactly why it went unnoticed. (gemini.js is gone now, but
+// the rule below is what keeps the next module from repeating it.)
 //
 // Reading through here costs nothing in the browser. Vite replaces the bare
 // `import.meta.env` below with the same fully-serialized object of VITE_*

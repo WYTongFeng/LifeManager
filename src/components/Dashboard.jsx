@@ -30,7 +30,7 @@ export default function Dashboard({
   expenses, dailyBudget,
   allMeals = [], allWorkouts = [], allExpenses = [],
   history, archivedXp = 0,
-  onOpenAi, onStartRestTimer
+  onOpenExport, onStartRestTimer
 }) {
   const navigate = useNavigate();
   const [showHistory, setShowHistory] = useState(false);
@@ -325,11 +325,11 @@ export default function Dashboard({
         </p>
 
         <button
-          onClick={onOpenAi}
+          onClick={onOpenExport}
           className="btn-primary"
           style={{ width: '100%', marginTop: '10px', padding: '6px', fontSize: '0.78rem' }}
         >
-          <Sparkles size={15} /> Ask AI Life Coach
+          <Sparkles size={15} /> 复制我的数据 · 拿去问 AI
         </button>
       </div>
 
