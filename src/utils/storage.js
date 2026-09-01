@@ -98,12 +98,12 @@ export function getTodayString(d = new Date()) {
  *
  *   Dashboard   `useMemo(() => getTodayString(), [])` — the 7-day strip and the
  *               "today" pill froze at whatever day the component mounted on.
- *   CycleView   `useMemo(() => getCycle(), [])` — the whole payday budget. Its
+ *   CycleView   `useMemo(() => getCycle(), [])` — the whole monthly budget. Its
  *               `daysRemaining` is the divisor for the daily safe limit, so a
  *               stale one hands out yesterday's allowance; and left open across
- *               the 10th it kept budgeting the PREVIOUS cycle entirely.
+ *               a month boundary it kept budgeting the PREVIOUS cycle entirely.
  *   App.jsx     the same `getCycle()`, feeding the survival banner's
- *               "还有 N 天才发薪".
+ *               "这个月还剩 N 天".
  *
  * On a desktop tab you'd get away with it. This ships as an Android APK, where
  * "the app was never actually closed" is the normal state — the WebView is

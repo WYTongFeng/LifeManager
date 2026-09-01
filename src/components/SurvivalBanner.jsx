@@ -13,7 +13,7 @@ const money = (n) => `RM ${num(n).toLocaleString('en-MY', { minimumFractionDigit
  * Deliberately has no dismiss button. A close button would let the banner be
  * silenced without the actual number changing, which defeats it. It only
  * stops showing once `ownCash` genuinely rises above SURVIVAL_THRESHOLD —
- * payday arrives, or spending stops.
+ * money comes in, or spending stops.
  */
 export default function SurvivalBanner({ ownCash, daysRemaining }) {
   return (
@@ -25,7 +25,7 @@ export default function SurvivalBanner({ ownCash, daysRemaining }) {
       <ShieldAlert size={16} style={{ flexShrink: 0 }} />
       <span>
         生存模式 SURVIVAL MODE · 可动用现金只剩 {money(ownCash)}（低于 {money(SURVIVAL_THRESHOLD)}）
-        {daysRemaining != null && <> · 还有 {daysRemaining} 天才发薪</>}
+        {daysRemaining != null && <> · 这个月还剩 {daysRemaining} 天</>}
         {' '}— 只买躲不掉的：吃饭、交通。
       </span>
     </div>

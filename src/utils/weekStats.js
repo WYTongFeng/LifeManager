@@ -20,9 +20,9 @@
 // below applies the same rule here — the previous week is clamped to the same
 // number of elapsed days before anything is subtracted.
 //
-// Deliberately a plain Monday-start calendar week, NOT the payday cycle from
+// Deliberately a plain Monday-start calendar week, NOT the money cycle from
 // cycle.js. The cycle is specifically about money-cycle budgeting (resets on
-// the 10th); "how was my week" is a different, more familiar question with
+// the 1st); "how was my week" is a different, more familiar question with
 // its own normal calendar shape — conflating the two would make neither
 // answer the question it's actually for.
 

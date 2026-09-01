@@ -67,8 +67,8 @@ const pad = (s, w) => {
  * The window a report covers.
  *
  * WHY THIS IS NOT "THE LAST N DAYS"
- * It was, and "最近 30 天" is not a month in this app. The month starts on
- * payday, the 10th — so on the 25th a 30-day window reaches back into the
+ * It was, and "最近 30 天" is not a month in this app. The month is the
+ * calendar month — so on the 25th a 30-day window reaches back into the
  * PREVIOUS cycle and mixes two budgets into one set of totals. Every figure
  * stays arithmetically true and the report answers a question nobody asked.
  *
@@ -227,7 +227,7 @@ export function buildMoneyReport({
   // Balances are ALWAYS derived from every record ever logged, never from the
   // window. A balance is the running result of the whole history; computing it
   // from one month would report what the account would hold if the user had
-  // come into existence on the 10th.
+  // come into existence on the 1st.
   const accounts = resolveAccounts(rawAccounts, expenses);
   const budget = computeCycleBudget({ incomeSources, allocations, expenses, cycle });
   const inCycle = expenses.filter(e => isInCycle(e.date ?? cycle.start, cycle));
@@ -238,7 +238,7 @@ export function buildMoneyReport({
     `LifeManager 记账资料`,
     `导出时间：${today} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
     `货币：MYR（RM）`,
-    `记账周期：每月 10 号发薪日为一个周期（不是 1 号）`,
+    `记账周期：日历月（每月 1 号 → 月底）`,
     rangeLabel || (from ? `这份涵盖：${from} → ${to ?? '今天'}` : `这份涵盖：全部记录`),
     isCurrent
       ? `所属周期：${cycle.start} → ${cycle.end}（第 ${cycle.dayIndex + 1} / ${cycle.totalDays} 天，还剩 ${cycle.daysRemaining} 天，还没过完）`
@@ -334,10 +334,9 @@ export function buildHealthReport({
 } = {}) {
   const today = todayStr(now);
 
-  // The same window as the money side, deliberately — including the fact that
-  // 本月 here means the payday cycle, not the calendar month. Two different
-  // definitions of "month" in one export screen would be worse than one
-  // slightly unusual definition that the header states outright.
+  // The same window as the money side, deliberately. Two different definitions
+  // of "month" in one export screen would be worse than one that the header
+  // states outright.
   const meals = (from || to) ? allMeals.filter(m => inRange(m.date, from, to)) : allMeals;
   const workouts = (from || to) ? allWorkouts.filter(w => inRange(w.date, from, to)) : allWorkouts;
 

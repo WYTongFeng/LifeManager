@@ -1,13 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Plus, Trash2, Pencil, X, AlertTriangle, Landmark, Lock, Waves, Check,
+  Plus, Trash2, Pencil, X, AlertTriangle, Landmark, Lock, Check,
   Wallet, Radio, Archive, Banknote,
 } from '../utils/icons';
-import { usePersistentState, useLiveJSON, saveJSON, loadJSON, useToday } from '../utils/storage';
+import { useLiveJSON, saveJSON, loadJSON, useToday } from '../utils/storage';
 import { num, newId } from '../utils/num';
 import {
   computeNetPosition, computeSpendable, debtOutstanding, SURVIVAL_THRESHOLD,
-  getWaterfallOrder, toggleInstalmentPaid, moveInOrder,
+  getWaterfallOrder, toggleInstalmentPaid,
 } from '../utils/networth';
 import {
   ACCOUNT_TYPES, ACCOUNT_KINDS, typeMeta, resolveAccounts, reconcileAccount,
@@ -16,7 +16,7 @@ import {
 import { getCycle } from '../utils/cycle';
 import {
   INSTALMENT_FREQUENCIES, buildInstalments, rebuildSchedule, setInstalmentAmount,
-  removeInstalment, scheduleSummary, setCyclePlan,
+  removeInstalment, scheduleSummary,
 } from '../utils/debts';
 
 // Deliberately empty. Real balances used to be hardcoded here, which meant
@@ -94,12 +94,12 @@ export default function AccountsView({ expenses = [] }) {
   const [dFinal, setDFinal] = useState('');
 
   // Live balances, folded in once here so every consumer below (net position,
-  // waterfall, the account list itself) reads the same derived number.
+  // the debt list, the account list itself) reads the same derived number.
   const accounts = useMemo(() => resolveAccounts(rawAccounts, expenses), [rawAccounts, expenses]);
 
   // Keyed on the live date, never `[]` — the app stays open for days on the
   // phone, and a cycle frozen at mount reports the wrong 本期应还 every day
-  // after the first, and the wrong CYCLE entirely across the 10th. Same
+  // after the first, and the wrong CYCLE entirely once the month turns. Same
   // reasoning as CycleView's; see useToday() in storage.js.
   const todayStr = useToday();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -133,21 +133,22 @@ export default function AccountsView({ expenses = [] }) {
   // modal's own schedule list immediately instead of showing stale data.
   const editingDebt = editingId ? debts.find(d => d.id === editingId) : null;
 
-  // The user's own repayment order and per-item monthly plan. Empty `order`
-  // means "no override" — the suggestion stands — which is why it's the reset
-  // value rather than deleting the key.
-  const [debtPlan, setDebtPlan] = usePersistentState('debtPlan', { order: [], monthly: {} });
-  const customOrder = (debtPlan.order?.length ?? 0) > 0;
-  // `expenses` is the fourth argument and it was missing, which made this the
-  // one place in the app that reported debts at their STATED size — every
-  // repayment logged against a debt was invisible here. The 真实净值 card
-  // directly above it does pass expenses (computeNetPosition), so the same
-  // debt printed two different figures on the same screen, and the waterfall's
-  // was always the larger one. `getWaterfallOrder` has taken this parameter
-  // and been tested on it since repayments existed; only the call site lagged.
-  const waterfall = useMemo(
-    () => getWaterfallOrder(accounts, debts, debtPlan, expenses, cycle),
-    [accounts, debts, debtPlan, expenses, cycle],
+  // Every outstanding obligation — real debts plus what a custodial account is
+  // short of its target — smallest first.
+  //
+  // `null` for the plan argument, where `debtPlan` used to go: this screen no
+  // longer stores a payoff order or a per-cycle rate. Both were the app having
+  // an opinion about "how much am I paying this month", which now has exactly
+  // one home (本月). The stored key is left alone rather than deleted — an old
+  // backup restoring one costs nothing when nothing reads it.
+  //
+  // `expenses` matters: without it this reports debts at their STATED size and
+  // every repayment logged against one is invisible here, while the 真实净值
+  // card directly above (computeNetPosition) counts them — the same debt, two
+  // figures, one screen.
+  const debtList = useMemo(
+    () => getWaterfallOrder(accounts, debts, null, expenses, cycle),
+    [accounts, debts, expenses, cycle],
   );
 
   // --- accounts ---
@@ -640,246 +641,109 @@ export default function AccountsView({ expenses = [] }) {
       {/* 储备金进度 lived here as its own section and was the FOURTH place PBE
           appeared on this one screen: the 现在能花 card names it as 代管·不能动,
           its account card already prints 目标 RM15,269 · 还差 RM2,596.91, and the
-          repayment plan below lists it as 补回储备金. A progress bar repeating a
+          debt list below lists it as 欠自己的储备金. A progress bar repeating a
           number three other blocks already carry is the "同一笔东西到处重复"
           the user asked to be rid of, so it is gone — the account card is where
-          a per-account figure belongs, and the plan is where "what do I do about
-          it" belongs. */}
+          a per-account figure belongs, and the debt list is where "how much do
+          I still owe it" belongs. */}
 
-      {/* Debt waterfall */}
+      {/* 欠款 — WHAT IS OWED. Not what to do about it this month.
+
+          This was 还款规划, the waterfall: the same debts as 本月's, with the
+          same per-cycle box beside them and an order the app suggested. The
+          user, 1 Sep 2026: "户口欠款跟本月…好像那个还款瀑布，就跟本月的欠款
+          一样…我更喜欢本月的。这个月我要还多少我会自己去算的，这个 app 就是帮
+          我记录一下".
+
+          So the two screens stopped asking the same question. This one owns
+          「我总共欠多少」 and the instalment tables — tap a row to edit one.
+          「这个月还多少」 now exists once, in 本月. The suggested payoff order
+          went with the box: it was the app holding an opinion about a decision
+          he had just said was his, and it was the thing making one debt look
+          like two different demands on two different screens. */}
       {(() => {
-        // WHAT THIS CYCLE ACTUALLY ASKS FOR, kept apart from what is owed in
-        // total. Every item used to be one number — the total — so an
-        // instalment plan and money owed to a friend looked like the same
-        // demand, and RM1,864.28 of SPayLater read as "hand over RM1,864.28"
-        // when the only thing due is RM368.70. The user's words: "不应该因为
-        // 有一笔总欠款，就建议我把全部现金一次拿去还掉".
-        const mustPay = waterfall.filter(i => i.commitment === 'scheduled');
-        const dueNow = mustPay.reduce((t, i) => t + num(i.dueThisCycle), 0);
-        const totalOwed = waterfall.reduce((t, i) => t + num(i.outstanding), 0);
-        const COMMITMENT = {
-          scheduled: { label: '分期 · 必须按期', color: 'var(--color-accent-red)', soft: 'var(--color-accent-red-soft)' },
-          flexible: { label: '你自己决定', color: 'var(--color-money)', soft: 'var(--color-money-soft)' },
-          reserve: { label: '补回储备金', color: 'var(--color-diet)', soft: 'var(--color-diet-soft)' },
+        const totalOwed = debtList.reduce((t, i) => t + num(i.outstanding), 0);
+        const KIND = {
+          scheduled: { label: '分期', color: 'var(--color-accent-red)', soft: 'var(--color-accent-red-soft)' },
+          flexible: { label: '一次过', color: 'var(--color-money)', soft: 'var(--color-money-soft)' },
+          reserve: { label: '欠自己的储备金', color: 'var(--color-diet)', soft: 'var(--color-diet-soft)' },
         };
         return (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', marginBottom: '0.75rem' }}>
             <h3 style={{ fontSize: '1rem', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '7px' }}>
-              <Waves size={17} color="var(--color-accent-red)" /> 还款规划 Repayment plan
+              <Banknote size={17} color="var(--color-accent-red)" /> 欠款 Debts
             </h3>
             <button onClick={openAddDebt} className="btn-secondary" style={{ padding: '6px 11px', fontSize: '0.73rem' }}>
               <Plus size={13} /> 新增欠款
             </button>
           </div>
 
-          {/* The two figures, side by side and never merged — "我总共欠多少" and
-              "我现在实际需要拿多少钱出来还" are different questions and mixing
-              them is what made this screen unreadable. */}
-          {waterfall.length > 0 && (
-          <div className="glass-card" style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginBottom: '10px' }}>
-            <div>
-              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>这个周期一定要还</div>
-              <div style={{
-                fontSize: '1.5rem', fontWeight: '800', lineHeight: 1.15,
-                color: dueNow > 0 ? 'var(--color-accent-red)' : 'var(--color-money)',
-              }}>
-                {money(dueNow)}
-              </div>
-              <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                {dueNow > 0 ? `${mustPay.filter(i => i.dueThisCycle > 0).length} 笔有期限的` : '这个周期没有一定要还的'}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>总共还欠</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: '800', lineHeight: 1.15, color: 'var(--text-secondary)' }}>
-                {money(totalOwed)}
-              </div>
-              <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                慢慢还的，不是现在要给
-              </div>
-            </div>
-          </div>
-          )}
-
-          {/* The order is a SUGGESTION, and says so. Presenting it as the
-              answer would be overstating what it is: a momentum argument, not
-              a calculation of what's cheapest. The user sets the real order.
-              It only ever governs where SPARE money goes — the scheduled items
-              have a date and are not a matter of preference. */}
-          {waterfall.length > 0 && (
-            <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>
-              {customOrder
-                ? '这是你自己排的顺序 — 有多余的钱先还哪个。下面每项可以上下移动，点一行可以改。'
-                : '有多余的钱先还哪个？建议按剩下金额由小到大 — 先清掉最小的一项，比省下更多钱但还是一堆没清的项目更有感觉。顺序你可以自己改，点一行可以改内容。'}
+          {/* NOT a big 总共还欠 card. 「总共欠」 is already one of the four
+              figures at the top of this same screen, and printing it twice in
+              two sizes is the repetition this rewrite exists to remove — so the
+              list says it in one line and says out loud that it is the same
+              number, rather than leaving the reader to reconcile them.
+              「这个周期一定要还」 is gone with the waterfall: a deadline figure
+              belongs on the screen about this month, not the one about standing. */}
+          {debtList.length > 0 && (
+            <p style={{ fontSize: '0.67rem', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>
+              {debtList.length} 笔，加起来 <strong>{money(totalOwed)}</strong> — 就是上面那个「总共欠」。
+              慢慢还的，不是现在要给。
             </p>
           )}
-          {customOrder && (
-            <button
-              type="button"
-              onClick={() => setDebtPlan({ ...debtPlan, order: [] })}
-              className="btn-secondary"
-              style={{ fontSize: '0.68rem', padding: '0.4rem 0.7rem', marginBottom: '10px' }}
-            >
-              恢复建议顺序
-            </button>
-          )}
-          {waterfall.length === 0 && (
+
+          {debtList.length === 0 && (
             <div className="glass-card" style={{ textAlign: 'center', padding: '1.2rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
               没有欠款。分期（SPayLater、Atome）和欠朋友的钱都加在这里。
             </div>
           )}
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {waterfall.map((item, i) => {
-              const meta = COMMITMENT[item.commitment] ?? COMMITMENT.flexible;
-              // A scheduled instalment is not a number you get to type: the
-              // amount and the date were both set by someone else. The input
-              // is only offered where there is genuinely a decision to make.
-              const decidable = item.commitment !== 'scheduled';
+            {debtList.map((item) => {
+              const meta = KIND[item.commitment] ?? KIND.flexible;
               const debtId = item.kind === 'debt' ? item.id.slice('debt:'.length) : null;
               const debtRow = debtId ? debts.find(d => String(d.id) === debtId) : null;
               const planSummary = debtRow ? scheduleSummary(debtRow) : null;
-              // Anything interactive inside a clickable card has to stop the
-              // click, or nudging an item up or typing a figure would also open
-              // the edit modal on top of what you were doing.
-              const swallow = (e) => e.stopPropagation();
               return (
               <div
                 key={item.id}
                 className="glass-card"
                 style={{ padding: '0.8rem 0.9rem', cursor: debtRow ? 'pointer' : 'default' }}
-                // The plan's rows ARE the debts list now — there is no second
-                // list below to go and click. A reserve row has no `debts`
-                // entry to open, so only real debts are clickable.
+                // A reserve row has no `debts` entry to open, so only real
+                // debts are clickable.
                 onClick={debtRow ? () => openEditDebt(debtRow) : undefined}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '9px', minWidth: 0 }}>
-                    <span style={{
-                      flexShrink: 0, width: '22px', height: '22px', borderRadius: '50%',
-                      background: i === 0 ? 'var(--color-diet-soft)' : 'var(--bg-card-hover)',
-                      border: `1px solid ${i === 0 ? 'var(--color-diet)' : 'var(--border-glass)'}`,
-                      color: i === 0 ? 'var(--color-diet)' : 'var(--text-muted)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: '0.72rem', fontWeight: '800',
-                    }}>
-                      {i + 1}
-                    </span>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                        <h4 style={{ fontSize: '0.85rem', fontWeight: '700' }}>{item.label}</h4>
-                        <span style={{
-                          fontSize: '0.55rem', fontWeight: '800', padding: '1px 5px',
-                          borderRadius: 'var(--radius-sm)', background: meta.soft, color: meta.color,
-                        }}>
-                          {meta.label}
-                        </span>
-                      </div>
-                      <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
-                        {item.nextDue ? `下一期 ${item.nextDue}` : item.kind === 'reserve' ? '没有期限' : '几时还你自己决定'}
-                        {/* 后续分期, said out loud. Without it the row shows
-                            what is due now and what is owed in total, and the
-                            shape in between — how many more, until when — was
-                            only visible by opening the debt. That shape is the
-                            reason the total is not a demand. */}
-                        {planSummary && planSummary.remainingCount > 1 && (
-                          <> · 之后还有 {planSummary.remainingCount - 1} 期，最后一期 {planSummary.last?.due}</>
-                        )}
-                        {customOrder && !item.followsSuggestion && ` · 建议排第 ${item.suggestedRank + 1}`}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <h4 style={{ fontSize: '0.85rem', fontWeight: '700' }}>{item.label}</h4>
+                      <span style={{
+                        fontSize: '0.55rem', fontWeight: '800', padding: '1px 5px',
+                        borderRadius: 'var(--radius-sm)', background: meta.soft, color: meta.color,
+                      }}>
+                        {meta.label}
                       </span>
                     </div>
+                    {/* The SHAPE of what is left — how many more, until when.
+                        Without it a row shows one big total and nothing else,
+                        which is what made a RM1,864.28 plan read as a demand
+                        for RM1,864.28. */}
+                    <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
+                      {item.nextDue ? `下一期 ${item.nextDue}` : item.kind === 'reserve' ? '没有期限' : '几时还你自己决定'}
+                      {planSummary && planSummary.remainingCount > 1 && (
+                        <> · 还有 {planSummary.remainingCount} 期，最后一期 {planSummary.last?.due}</>
+                      )}
+                    </span>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                    {/* 本期应还 leads, 总欠款 beneath it in small type. The old
-                        card led with the total and printed nothing else, which
-                        is the whole reason this screen read as a demand. */}
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{
-                        fontSize: '0.95rem', fontWeight: '800',
-                        color: item.dueThisCycle > 0 ? 'var(--color-accent-red)' : 'var(--text-muted)',
-                      }}>
-                        {item.dueThisCycle > 0 ? money(item.dueThisCycle) : '—'}
-                      </div>
-                      <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>
-                        总欠 {money(item.outstanding)}
-                      </div>
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontSize: '0.95rem', fontWeight: '800', color: 'var(--color-accent-red)' }}>
+                      {money(item.outstanding)}
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                      {[['↑', -1, i === 0], ['↓', 1, i === waterfall.length - 1]].map(([glyph, delta, disabled]) => (
-                        <button
-                          key={glyph}
-                          type="button"
-                          disabled={disabled}
-                          aria-label={`${item.label} 往${delta < 0 ? '上' : '下'}移`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDebtPlan({ ...debtPlan, order: moveInOrder(waterfall, item.id, delta) });
-                          }}
-                          style={{
-                            width: '24px', height: '20px', lineHeight: 1,
-                            borderRadius: 'var(--radius-sm)', cursor: disabled ? 'default' : 'pointer',
-                            background: 'var(--bg-input)', border: '1px solid var(--border-glass)',
-                            color: disabled ? 'var(--text-muted)' : 'var(--text-secondary)',
-                            opacity: disabled ? 0.35 : 1, fontSize: '0.7rem',
-                          }}
-                        >
-                          {glyph}
-                        </button>
-                      ))}
-                    </div>
+                    <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>还欠</div>
                   </div>
                 </div>
 
-                {/* ONE repayment plan, not two.
-                    This box used to write `debtPlan.monthly`, which fed
-                    `monthsToClear` and nothing else — meanwhile 本月 had its own
-                    box writing `debt.plan`, which is the one that actually
-                    reserves money out of the cycle. Same words, same debt, one
-                    of them decorative. A debt now writes the real one from
-                    here too; only a reserve (which has no `debts` row of its
-                    own) still lives in `debtPlan.monthly`. */}
-                {decidable ? (
-                  <div
-                    onClick={swallow}
-                    style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '9px', flexWrap: 'wrap' }}
-                  >
-                    <label style={{ fontSize: '0.66rem', color: 'var(--text-muted)', flexShrink: 0 }}>
-                      这个周期还
-                    </label>
-                    <input
-                      type="number" step="0.01" min="0" inputMode="decimal"
-                      placeholder="自己填"
-                      value={item.kind === 'reserve'
-                        ? (debtPlan.monthly?.[item.id] ?? '')
-                        : (debts.find(d => String(d.id) === debtId)?.plan?.[cycle.start] ?? '')}
-                      onChange={(e) => {
-                        if (item.kind === 'reserve') {
-                          setDebtPlan({
-                            ...debtPlan,
-                            monthly: { ...(debtPlan.monthly ?? {}), [item.id]: e.target.value },
-                          });
-                        } else {
-                          setDebts(setCyclePlan(loadJSON('debts', []), debtId, cycle.start, e.target.value));
-                        }
-                      }}
-                      style={{
-                        width: '90px', padding: '5px 8px', borderRadius: 'var(--radius-sm)',
-                        background: 'var(--bg-input)', border: '1px solid var(--border-glass)',
-                        color: 'white', fontSize: '0.72rem',
-                      }}
-                    />
-                    {item.monthsToClear != null && (
-                      <span style={{ fontSize: '0.66rem', color: 'var(--color-money)' }}>
-                        照这个速度 {item.monthsToClear} 个月清完
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '9px', lineHeight: 1.5 }}>
-                    金额和日期是分期表定的，不是你填的。<strong>点这一行可以改分期表</strong>；
-                    想提早还，去「本月」按还款。
-                  </p>
-                )}
                 {item.progressPct != null && (
                   <div style={{ height: '4px', background: 'var(--border-glass)', borderRadius: '2px', marginTop: '8px' }}>
                     <div style={{
@@ -892,15 +756,16 @@ export default function AccountsView({ expenses = [] }) {
               );
             })}
           </div>
+
+          {debtList.length > 0 && (
+            <p style={{ fontSize: '0.67rem', color: 'var(--text-muted)', marginTop: '10px', lineHeight: 1.5 }}>
+              这里只管「总共欠多少」和分期表 — <strong>点一行</strong>可以改内容或分期表。
+              这个月要还多少、几时还，在「本月」那边填和记，一个地方就够了。
+            </p>
+          )}
         </div>
         );
       })()}
-
-      {/* The 欠款 Debts list stood here and listed exactly the same debts as
-          the repayment plan above, with the same outstanding figures — two
-          lists, one set of facts, and (until the waterfall was passed the
-          ledger) two different answers. The plan's rows are the list now: each
-          one opens its debt for editing, and 新增 sits in the plan's header. */}
 
       {/* Account modal */}
       {accountModal && (

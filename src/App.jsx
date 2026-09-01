@@ -255,8 +255,8 @@ export default function App() {
   const [today, setToday] = useState(getTodayString);
 
   // Keyed on `today`, not `[]`. The survival banner reads `daysRemaining` off
-  // this to say "还有 N 天才发薪"; frozen at mount it counted down to the wrong
-  // payday for as long as the app stayed open, which on Android is days.
+  // this to say "这个月还剩 N 天"; frozen at mount it counted down to the wrong
+  // month's end for as long as the app stayed open, which on Android is days.
   //
   // `today` is deliberately a dependency the body doesn't reference — getCycle()
   // reads the clock itself, so the date IS the cache key. The linter can't see

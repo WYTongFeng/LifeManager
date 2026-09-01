@@ -2,10 +2,11 @@
 //
 // TWO KINDS OF DEBT, AND THEY BEHAVE NOTHING ALIKE
 //
-//   fixed     SPayLater and anything else with an instalment plan. The amount
-//             is decided by someone else and the same figure leaves every
-//             cycle whether you like it or not. Paying EARLY is the only
-//             control you have, and it should visibly shorten the plan.
+//   fixed     SPayLater and anything else with an instalment plan. Someone
+//             else wrote the table, so the table is what the app SUGGESTS for
+//             the cycle — but the figure that actually gets reserved is still
+//             the user's, because he is the one who knows what he is paying and
+//             when. Paying early should visibly shorten the plan.
 //
 //   flexible  Money owed to a person, a card you chip away at. There is no
 //             monthly figure at all until you decide one, and next month you
@@ -14,18 +15,23 @@
 //             a commitment the real debt never had.
 //
 // A debt is `fixed` exactly when it has a `schedule`. Nothing else distinguishes
-// them, and nothing needs to.
+// them, and nothing needs to — the two now share one input and one code path
+// (`plannedForCycle`), differing only in what the box is pre-filled with.
 //
 // HOW A REPAYMENT HITS THE BUDGET — the user's own words:
 // "我会希望月头就先拿一笔钱还这个月的，然后再让我这个月的今天还能花多少变少,
 //  就是整个月的每天,是每一天花的钱变少"
 //
-// So a repayment is NOT a spending spike on the day it happens. It is reserved
-// at the top of the cycle and spread thin across every remaining day, exactly
-// like rent — RM200 owed over 30 days is "RM6.67 less per day", not "one day
-// where you cannot eat". That is what the existing `committed` mechanism in
-// cycle.js already does for bills, so repayments join it rather than getting a
-// parallel one.
+// So a repayment is NOT a spending spike on the day it happens. The figure HE
+// decides for the cycle is reserved and spread thin across every remaining day,
+// exactly like rent — RM200 owed over 30 days is "RM6.67 less per day", not
+// "one day where you cannot eat". That is what the existing `committed`
+// mechanism in cycle.js already does for bills, so repayments join it rather
+// than getting a parallel one.
+//
+// What is spread is the AMOUNT, never the timing. The app never asks him to pay
+// on a particular day and has no opinion about which day he does: the reserve
+// is budgeting, `makeRepayment`'s free `date` is the record.
 //
 // The direct consequence, and the reason `isRepayment` exists: the actual
 // payment must then be kept OUT of `spentThisCycle`. It was already subtracted
@@ -119,26 +125,49 @@ export function remainingPlanThisCycle(debt, expenses = [], cycle) {
 }
 
 /**
+ * What the instalment table says this cycle costs — the SUGGESTION, and only
+ * ever a suggestion. Zero for a debt with no schedule, which has nothing to
+ * suggest from.
+ */
+export function scheduledForCycle(debt, cycle) {
+  if (!cycle || !isFixedDebt(debt)) return 0;
+  return sumBy(
+    debt.schedule.filter(i => !i.paid && isInCycle(String(i.due), cycle)),
+    i => num(i.amount)
+  );
+}
+
+/** Has the user typed a figure for this debt this cycle? */
+export function hasCyclePlan(debt, cycle) {
+  return Boolean(cycle) && debt?.plan?.[cycle.start] != null;
+}
+
+/**
  * What this cycle is supposed to cost.
  *
- *   fixed     every instalment falling inside the cycle. Note this is a cycle
- *             (10th → 10th), not a calendar month, so an instalment dated the
- *             1st belongs to the cycle that started the previous 10th.
- *   flexible  whatever you decided for this cycle, and nothing until you do.
+ * ONE RULE FOR BOTH KINDS: what you decided, and only failing that, what the
+ * schedule says. A fixed instalment used to be read straight off the table with
+ * no way to say otherwise, which made the app the one deciding how much left
+ * his account this month. His words, 1 Sep 2026: "还钱什么我自己来定时间 …
+ * 这个月我要还多少我会自己去算的，这个 app 就是帮我记录一下". So the schedule
+ * became the default rather than the answer — it still fills the box, and it is
+ * still shown beside the box after an override (`scheduledForCycle`), because
+ * "what the plan wanted" stays worth knowing once you have chosen differently.
+ *
+ * A flexible debt is unchanged: nothing until you decide.
  *
  * `plan` is keyed by cycle start, the same shape a variable allocation's
  * `actuals` uses — so deciding RM200 this month says nothing about next month,
  * and last month's decision stays on the record instead of being overwritten.
+ * A stored 0 is a real answer ("nothing this month"), which is why the lookup
+ * is `!= null` rather than truthiness: falling through to the schedule there
+ * would quietly overrule the one case where saying zero matters.
  */
 export function plannedForCycle(debt, cycle) {
   if (!cycle) return 0;
-  if (isFixedDebt(debt)) {
-    return sumBy(
-      debt.schedule.filter(i => !i.paid && isInCycle(String(i.due), cycle)),
-      i => num(i.amount)
-    );
-  }
-  return num(debt?.plan?.[cycle.start]);
+  const chosen = debt?.plan?.[cycle.start];
+  if (chosen != null) return num(chosen);
+  return scheduledForCycle(debt, cycle);
 }
 
 /**
@@ -154,14 +183,24 @@ export function reservedForCycle(debt, expenses = [], cycle) {
   return Math.max(plannedForCycle(debt, cycle), repaidInCycle(debt, expenses, cycle));
 }
 
-/** Set (or clear, with 0) what you intend to repay on a flexible debt this cycle. */
+/**
+ * Set what you intend to repay on this debt this cycle.
+ *
+ * An EMPTY value (null, undefined, '') clears the decision — for a scheduled
+ * debt that means "go back to following the instalment table", which is the
+ * only way back once you have typed over it. A number is stored as typed,
+ * **including 0**: "I am not paying this one this month" is a decision, and the
+ * old rule (0 deletes the key) made it unsayable for a fixed debt, since the
+ * schedule would immediately reclaim the row.
+ */
 export function setCyclePlan(debts, debtId, cycleStart, amount) {
+  const cleared = amount == null || amount === '';
   const value = num(amount);
   return debts.map(d => {
     if (String(d.id) !== String(debtId)) return d;
     const plan = { ...(d.plan ?? {}) };
-    if (value > 0) plan[cycleStart] = value;
-    else delete plan[cycleStart];
+    if (cleared) delete plan[cycleStart];
+    else plan[cycleStart] = Math.max(0, value);
     return { ...d, plan };
   });
 }
@@ -211,6 +250,12 @@ export function debtsForCycle(debts = [], expenses = [], cycle) {
       debt,
       fixed: isFixedDebt(debt),
       planned,
+      // What the instalment table wanted, and whether the figure above is the
+      // user's own answer or just that table showing through. The screen prints
+      // both — a suggestion that disappears the moment you override it leaves
+      // you with no way to check what you overrode.
+      suggested: scheduledForCycle(debt, cycle),
+      chosen: hasCyclePlan(debt, cycle),
       repaid,
       reserved: Math.max(planned, repaid),
       remainingThisCycle: Math.max(0, Math.min(outstanding, planned - repaid)),

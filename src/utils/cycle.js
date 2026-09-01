@@ -1,9 +1,20 @@
 // The monthly money cycle.
 //
-// This app's month does not start on the 1st — it starts on payday, the 10th.
+// The cycle is the CALENDAR MONTH: 1st to end of month. It used to run payday
+// to payday (the 10th), on the theory that a budget should start when the money
+// lands. Living with it said otherwise — the user, on 1 Sep 2026: "钱确实是9月1
+// 号算新的一天". A screen headed 本月 that still showed August on the 1st is
+// wrong in the only way that matters, which is the way you read it.
+//
+// The money arriving on a different day is a separate fact, and it is already
+// handled where it belongs: an income source counts from the moment it lands
+// (`incomeSources` + the arrival record), and a repayment is dated by hand.
+// Neither needs the month to be bent around it.
+//
 // Every "how much can I spend today" answer depends on which cycle we're in and
 // how many days are left in it, so that maths lives here as pure functions and
-// is unit-tested (`npm test`).
+// is unit-tested (`npm test`). `startDay` stays a parameter — the arithmetic
+// below is general, and only the default moved.
 //
 // THE PASS-THROUGH PROBLEM
 // Some money lands in the account without being yours to spend. The friends'
@@ -21,8 +32,8 @@
 
 import { isRealSpend, isDailySpend } from './accounts.js';
 
-/** Day of the month the cycle rolls over on. */
-export const CYCLE_START_DAY = 10;
+/** Day of the month the cycle rolls over on. 1 = the calendar month. */
+export const CYCLE_START_DAY = 1;
 
 function ymd(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -31,13 +42,14 @@ function ymd(d) {
 /**
  * The cycle containing `today`.
  *
- * Before the 10th you are still living on last month's payday, so the cycle
- * started on the *previous* month's 10th — getting this backwards would reset
- * the budget nine days early, every month.
+ * At the default `startDay` of 1 this is simply "the month `today` is in".
+ * The rollback branch below is kept because the arithmetic is general: for any
+ * other start day, a date before it still belongs to the *previous* month's
+ * cycle, and getting that backwards would reset the budget early every month.
  *
  * @returns {{start: string, end: string, startDate: Date, endDate: Date,
  *            totalDays: number, dayIndex: number, daysRemaining: number}}
- *          `end` is exclusive: the next payday belongs to the next cycle.
+ *          `end` is exclusive: the 1st of next month belongs to the next cycle.
  */
 export function getCycle(today = new Date(), startDay = CYCLE_START_DAY) {
   const ref = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -55,7 +67,7 @@ export function getCycle(today = new Date(), startDay = CYCLE_START_DAY) {
 
   const DAY = 86400000;
   const totalDays = Math.round((endDate - startDate) / DAY);
-  const dayIndex = Math.round((ref - startDate) / DAY);         // 0 on payday
+  const dayIndex = Math.round((ref - startDate) / DAY);         // 0 on the 1st
   const daysRemaining = Math.max(1, totalDays - dayIndex);       // includes today
 
   return {
@@ -159,7 +171,7 @@ export function computeCycleBudget({ incomeSources = [], allocations = [], expen
   // The rule, per source:
   //
   //   nothing arrived yet   -> count what you EXPECT. The budget has to work on
-  //                            the 10th, before the allowance lands.
+  //                            the 1st, before the allowance lands.
   //   something arrived     -> count what ACTUALLY arrived, and stop using the
   //                            expectation. An allowance that came RM200 short
   //                            must reduce the month, not keep quoting the

@@ -13,48 +13,56 @@ const check = (name, got, want) => {
 const on = (y, m, d) => new Date(y, m - 1, d);
 
 // --- which cycle are we in -------------------------------------------------
-check('payday itself starts a new cycle',
-  getCycle(on(2026, 8, 10)).start, '2026-08-10');
-check('payday is day 0',
-  getCycle(on(2026, 8, 10)).dayIndex, 0);
-check('the day after payday is still this cycle',
-  getCycle(on(2026, 8, 11)).start, '2026-08-10');
+// The cycle is the calendar month, as of 1 Sep 2026. It ran 10th → 10th before
+// that; `startDay` is still a parameter and the rollback branch below is what
+// keeps that arithmetic honest.
+check('the 1st starts a new cycle',
+  getCycle(on(2026, 8, 1)).start, '2026-08-01');
+check('the 1st is day 0',
+  getCycle(on(2026, 8, 1)).dayIndex, 0);
+check('mid-month is the same cycle',
+  getCycle(on(2026, 8, 11)).start, '2026-08-01');
+check('the last day of the month is still that month',
+  getCycle(on(2026, 8, 31)).start, '2026-08-01');
+check('  ...and it ends on the 1st of the next',
+  getCycle(on(2026, 8, 31)).end, '2026-09-01');
 
-// The one that would silently reset the budget nine days early every month.
-check('before the 10th belongs to LAST month\'s payday',
-  getCycle(on(2026, 8, 9)).start, '2026-07-10');
-check('  ...and ends on this month\'s payday',
-  getCycle(on(2026, 8, 9)).end, '2026-08-10');
+// A non-1 start day still rolls back — the branch that would silently reset the
+// budget early every month if it were ever got backwards.
+check('a 10th-start cycle still rolls back before the 10th',
+  getCycle(on(2026, 8, 9), 10).start, '2026-07-10');
+check('  ...and ends on this month\'s 10th',
+  getCycle(on(2026, 8, 9), 10).end, '2026-08-10');
 
 // --- boundaries ------------------------------------------------------------
-check('year rollover: 5 Jan belongs to 10 Dec',
-  getCycle(on(2027, 1, 5)).start, '2026-12-10');
+check('year rollover: 5 Jan is January, not last December',
+  getCycle(on(2027, 1, 5)).start, '2027-01-01');
 check('year rollover end',
-  getCycle(on(2027, 1, 5)).end, '2027-01-10');
-check('Feb is short: 10 Feb -> 10 Mar is 28 days (2026)',
+  getCycle(on(2027, 1, 5)).end, '2027-02-01');
+check('Feb is short: 28 days (2026)',
   getCycle(on(2026, 2, 10)).totalDays, 28);
-check('leap year: 10 Feb 2028 -> 10 Mar is 29 days',
+check('leap year: Feb 2028 is 29 days',
   getCycle(on(2028, 2, 10)).totalDays, 29);
-check('31-day cycle',
+check('31-day month',
   getCycle(on(2026, 8, 10)).totalDays, 31);
 
 // --- days remaining includes today ----------------------------------------
-check('on payday the whole cycle remains',
-  getCycle(on(2026, 8, 10)).daysRemaining, 31);
-check('day before next payday leaves 1 day',
-  getCycle(on(2026, 9, 9)).daysRemaining, 1);
+check('on the 1st the whole month remains',
+  getCycle(on(2026, 8, 1)).daysRemaining, 31);
+check('the last day of the month leaves 1 day',
+  getCycle(on(2026, 8, 31)).daysRemaining, 1);
 check('never returns 0 days (would divide by zero)',
-  getCycle(on(2026, 9, 9)).daysRemaining > 0, true);
+  getCycle(on(2026, 8, 31)).daysRemaining > 0, true);
 
 // --- isInCycle: end is exclusive ------------------------------------------
 const c = getCycle(on(2026, 8, 15));
-check('start is inside', isInCycle('2026-08-10', c), true);
+check('start is inside', isInCycle('2026-08-01', c), true);
 check('mid is inside', isInCycle('2026-08-25', c), true);
-check('next payday is NOT inside (exclusive end)', isInCycle('2026-09-10', c), false);
-check('day before start is outside', isInCycle('2026-08-09', c), false);
+check('the 1st of next month is NOT inside (exclusive end)', isInCycle('2026-09-01', c), false);
+check('day before start is outside', isInCycle('2026-07-31', c), false);
 
 // --- budget maths ----------------------------------------------------------
-const cycle = getCycle(on(2026, 8, 10));   // 31 days, day 0
+const cycle = getCycle(on(2026, 8, 1));   // 31 days, day 0
 const income = [
   { id: 1, label: 'Internship', amount: 1000, kind: 'income' },
   { id: 2, label: 'Family', amount: 500, kind: 'income' },
@@ -84,8 +92,8 @@ b = computeCycleBudget({
   incomeSources: income, allocations, cycle,
   expenses: [
     { date: '2026-08-15', amount: 100 },   // in cycle
-    { date: '2026-08-09', amount: 999 },   // previous cycle — must be ignored
-    { date: '2026-09-10', amount: 999 },   // next cycle — must be ignored
+    { date: '2026-07-31', amount: 999 },   // previous cycle — must be ignored
+    { date: '2026-09-01', amount: 999 },   // next cycle — must be ignored
   ],
 });
 check('only this cycle\'s spending counts', b.spentThisCycle, 100);
@@ -135,7 +143,7 @@ check('once confirmed, no longer flagged as estimated',
   isEstimated(tnbConfirmed, cycle), false);
 
 // A DIFFERENT cycle's actual must not leak into this one.
-const tnbFromLastCycle = { ...tnb, actuals: { '2026-07-10': 98.50 } };
+const tnbFromLastCycle = { ...tnb, actuals: { '2026-07-01': 98.50 } };
 check('an old cycle\'s actual does not apply to this cycle',
   resolveAllocationAmount(tnbFromLastCycle, cycle), 120);
 check('this cycle is still estimated even though a past one is confirmed',
@@ -159,17 +167,17 @@ check('variable allocation\'s actual counts toward committed',
 
 // --- previous cycle / same-day comparison -----------------------------------
 check('previous cycle starts a month earlier',
-  getPreviousCycle(getCycle(on(2026, 8, 15))).start, '2026-07-10');
+  getPreviousCycle(getCycle(on(2026, 8, 15))).start, '2026-07-01');
 check('previous cycle ends where this one starts',
-  getPreviousCycle(getCycle(on(2026, 8, 15))).end, '2026-08-10');
-check('year rollover: previous cycle of the Dec-10-starting cycle is November',
-  getPreviousCycle(getCycle(on(2027, 1, 5))).start, '2026-11-10');
+  getPreviousCycle(getCycle(on(2026, 8, 15))).end, '2026-08-01');
+check('year rollover: the cycle before January is December',
+  getPreviousCycle(getCycle(on(2027, 1, 5))).start, '2026-12-01');
 
-const augCycle = getCycle(on(2026, 8, 14));   // day index 4
+const augCycle = getCycle(on(2026, 8, 14));   // day index 13
 const augExpenses = [
-  { date: '2026-07-10', amount: 50 },   // prev cycle, day 0 — within cutoff
-  { date: '2026-07-14', amount: 30 },   // prev cycle, day 4 — within cutoff (inclusive)
-  { date: '2026-07-20', amount: 999 },  // prev cycle, day 10 — past the cutoff, excluded
+  { date: '2026-07-10', amount: 50 },   // prev cycle, day 9 — within cutoff
+  { date: '2026-07-14', amount: 30 },   // prev cycle, day 13 — within cutoff (inclusive)
+  { date: '2026-07-20', amount: 999 },  // prev cycle, day 19 — past the cutoff, excluded
   { date: '2026-06-30', amount: 999 },  // two cycles back — excluded entirely
 ];
 check('gross spend by day index only counts up to and including that day',

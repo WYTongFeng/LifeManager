@@ -2,6 +2,79 @@
 
 Tracks progress toward turning the LifeManager mockup into a complete personal app. Updated as we go.
 
+## M55 — 本月 = 日历月，还款只剩一个地方 ✅ done
+
+Two sentences of feedback on 1 Sep 2026, the morning the month turned:
+
+> 钱确实是9月1号算新的一天，但是还钱什么我自己来定时间 … 户口欠款跟本月，好像那个还款瀑布，就跟
+> 本月的欠款一样 … 我更喜欢本月的，这个月我要还多少我会自己去算的，这个app就是帮我记录一下
+
+### The cycle is the calendar month now, not payday to payday
+`CYCLE_START_DAY` went 10 → 1. The old boundary came from a real fact — the allowance lands on the
+10th — and the app bent the whole month around it. What that bought on 1 September was a screen
+headed 本月 showing August, which is wrong in the only way that matters: the way you read it.
+
+The money arriving on a different day is still handled, just where it belongs. An income source
+counts from the moment it actually lands (`incomeSourceId` on the arrival record, M51), and a
+repayment is dated by hand. Neither needed the month bent around it.
+
+`getCycle(today, startDay)` keeps its parameter and the rollback branch — a date before the start
+day still belongs to the previous month's cycle — and `test-cycle.mjs` still exercises that path with
+an explicit `10`, because deleting the branch would delete the test that says why it exists.
+
+**What moves, and what does not.** `debt.plan` and `allocation.actuals` are keyed by `cycle.start`,
+so entries written under `'2026-08-10'` simply stop being read; they stay on the record as history
+rather than being migrated, which is the same thing that happens to any past cycle's key. Nothing is
+lost and nothing is silently re-attributed to a month it did not happen in.
+
+### 还款瀑布 is gone; 本月 owns "这个月我要还多少"
+户口欠款 had a 还款规划 with a per-debt 这个周期还 box, and 本月 had a 本月想还 box. Same words,
+same debt, one screen apart — that is the 割裂 in his message, and M51 had already merged the
+*storage* behind them (schema v5) without merging the *screens*.
+
+- **户口欠款** is now a plain 欠款 list: what is owed in total, how many instalments are left and
+  when the last one falls, tap a row to edit its schedule. No per-cycle box, no ordering.
+- **本月** is the one place that asks how much this month.
+
+The suggested payoff order went with the box. Smallest-first is a momentum argument, not a
+calculation — and it was the app volunteering an opinion about a decision he had just said was his.
+`getWaterfallOrder` survives as the data source (still smallest-first, still the reserve rows) with
+`plan` passed as null; the stored `debtPlan` key is left alone so a restored backup carrying one
+costs nothing.
+
+The big 总共还欠 card went too. 总共欠 is already one of the four figures at the top of that same
+screen, so the list states it in one line and says out loud it is the same number — the fix for
+"同一笔东西到处重复" is not a fourth typeface, it is one sentence.
+
+### A schedule now suggests instead of answering
+Both kinds of debt share one box. A fixed one pre-fills it from the instalment table and keeps
+printing 「分期表这个月是 RM 368.70」 underneath — after an override too, with 用回分期表 to go back.
+That is 「先给建议、可以改」 applied to the one place it had never been: the instalment table
+was the app deciding, and "还钱什么我自己来定时间" says it should not be.
+
+Two consequences in `debts.js`:
+
+- `plannedForCycle` reads `plan[cycle.start]` first for BOTH kinds, schedule second.
+- `setCyclePlan` stores **0** instead of treating it as a clear; only `null`/`''` clears. Under the
+  old rule "I'm not paying this one this month" was unsayable for a scheduled debt — the schedule
+  would reclaim the row on the next read. Clearing is now what hands the cycle back to the table.
+
+What is spread across the days is the AMOUNT, never the timing: the reservation is budgeting,
+`makeRepayment`'s free `date` is the record. The 还这个月的 RM368.70 button is just 记一笔还款 now.
+
+### Tests — 1,213 (13 new in `test-debts.mjs`)
+The boundary tests were rewritten rather than retuned: 1st/last-day/rollover for the calendar month,
+plus the explicit-`10` pair for the parameter. Every other suite that failed did so on a fixture key
+(`plan: { '2026-08-10': … }`, `actuals: { '2026-08-10': … }`) or a date chosen to straddle the 10th
+— each moved to the 1st, which is the whole reason those fixtures name a date at all.
+
+Verified live against seeded data on 1 Sep 2026: cycle read 2026-09-01 → 2026-10-01 (第 1 / 30 天);
+SPayLater's box pre-filled 368.70 with the table named beneath it; typing 100 dropped 固定开销 from
+RM968.70 to RM700.00 and stored `plan: { '2026-09-01': 100 }`; 用回分期表 restored both; an explicit
+0 stored as 0 and reserved nothing (固定开销 RM600.00). 户口欠款's four rows totalled RM3,836.95,
+matching the 总共欠 tile above them exactly, and tapping SPayLater still opened its instalment table.
+No console errors.
+
 ## M54 — Life Hub: notes, reminders and special days behind the centre button ✅ done
 
 The brief in one line: **fewer app switches.** Writing a note, remembering a birthday, setting a

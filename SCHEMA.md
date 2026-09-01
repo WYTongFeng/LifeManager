@@ -61,12 +61,14 @@ users/{uid}/
                           openingBalance, openingAt, target, isDefault,
                           packages[], archived }]
   meta/debts           [{ id, creditor, amount, note, dueDate, accountId, schedule[], plan{} }]
-                       `schedule[]` present = a FIXED debt (SPayLater): the amount is decided for
-                       you and the cycle reserves whatever instalment falls inside it.
-                       Absent = FLEXIBLE: no monthly figure exists until you set one, and
-                       `plan` holds it per cycle — { '2026-08-10': 200 } — the same
-                       cycle-keyed shape a variable allocation's `actuals` uses, so this
-                       month's decision says nothing about next month's.
+                       `schedule[]` present = a FIXED debt (SPayLater): the instalment falling
+                       inside the cycle is what the app SUGGESTS. Absent = FLEXIBLE: nothing
+                       is suggested at all.
+                       Either way `plan` holds what the user actually decided, per cycle —
+                       { '2026-09-01': 200 } — the same cycle-keyed shape a variable
+                       allocation's `actuals` uses, so this month's decision says nothing
+                       about next month's. A key present WINS over the schedule (0 included,
+                       which is why the lookup is `!= null`); absent falls back to it.
                        What is still owed is DERIVED, never stored: the stated figure minus
                        every expense carrying `repaysDebtId`. See src/utils/debts.js.
   meta/routines        [{ id, name, exercises: [{name, targetSets}], durationEst }]
@@ -193,7 +195,7 @@ promote it to a collection.
 
 so logging a payment and moving a balance are the same action. `resolveAccounts()` in
 `src/utils/accounts.js` folds the result in under the name `balance` for the several consumers
-(`computeNetPosition`, the survival banner, the waterfall) that already read it — but nothing may ever
+(`computeNetPosition`, the survival banner, the debt list) that already read it — but nothing may ever
 write it back. `stripDerived()` exists at every write site precisely because a persisted stale copy
 would outrank the live derivation on the next load.
 

@@ -65,11 +65,11 @@ export function occurrencesPerYear(frequency) {
  * Fill in every field a bill might be missing, on READ.
  *
  * Bills saved before this file existed are plain `{label, amount}` monthlies
- * with no due day. They're normalized to a monthly bill due on payday — the
- * 10th — which is where the old model implicitly put everything anyway, so an
- * existing setup's numbers don't move the day this ships.
+ * with no due day. They're normalized to a monthly bill due on the first day of
+ * the cycle, which is where the old model implicitly put everything anyway, so
+ * an existing setup's numbers don't move the day this ships.
  */
-export function normalizeAllocation(a, cycleStartDay = 10) {
+export function normalizeAllocation(a, cycleStartDay = 1) {
   if (!a || typeof a !== 'object') return null;
   const frequency = a.frequency ?? 'monthly';
   return {

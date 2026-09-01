@@ -31,13 +31,13 @@ export default function TextExportModal({ onClose }) {
   const [kind, setKind] = useState('money');
   // 本月 by default. It is the question being asked almost every time, and
   // "最近 30 天" — which is what this used to offer — is not a month in an app
-  // whose month starts on the 10th. See reportRanges().
+  // whose month is the calendar month. See reportRanges().
   const [rangeKey, setRangeKey] = useState('cycle');
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
 
   // Recomputed per render rather than pinned at mount: the app stays open for
-  // days on the phone, and a modal opened after payday must not still be
+  // days on the phone, and a modal opened after the month turns must not still be
   // offering last cycle as 本月.
   const ranges = reportRanges();
   const range = ranges.find(r => r.key === rangeKey) ?? ranges[0];
@@ -155,10 +155,9 @@ export default function TextExportModal({ onClose }) {
           ))}
         </div>
 
-        {/* Each option prints the dates it actually covers. 本月 here means the
-            payday cycle, not the calendar month, and a label that says only
-            「本月」 would quietly mean something different from what a reader
-            assumes on, say, the 3rd. */}
+        {/* Each option prints the dates it actually covers — a label that says
+            only 「本月」 leaves the reader to work out where the boundary is,
+            and a report is exactly the place that should not be guessed at. */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginTop: '8px', flexShrink: 0 }}>
           {ranges.map(r => (
             <button

@@ -6,6 +6,10 @@
 // NEVER also be charged as spending on the day it leaves — that would subtract
 // the same money twice, and in the direction that makes paying off debt look
 // like overspending.
+//
+// What is reserved is the figure HE typed for the cycle. As of 1 Sep 2026 that
+// is true of a scheduled debt too: the instalment table fills the box in and is
+// still reported, but it does not answer for him. "还钱什么我自己来定时间".
 
 import {
   isFixedDebt, isRepayment, repaidTotal, repaidInCycle, statedRemaining,
@@ -13,7 +17,7 @@ import {
   setCyclePlan, makeRepayment, debtsForCycle, totalReservedForCycle,
   totalRepaidInCycle, REPAYMENT_CATEGORY,
   buildSchedule, buildInstalments, rebuildSchedule, setInstalmentAmount,
-  removeInstalment, scheduleSummary, commitmentOf,
+  removeInstalment, scheduleSummary, commitmentOf, scheduledForCycle, hasCyclePlan,
 } from '../src/utils/debts.js';
 import { getCycle, computeCycleBudget, grossSpentByDayIndex } from '../src/utils/cycle.js';
 import { debtOutstanding, computeNetPosition } from '../src/utils/networth.js';
@@ -34,9 +38,9 @@ const near = (name, got, want, tol = 0.005) => {
 
 const sumOf = (rows) => rows.reduce((t, i) => t + i.amount, 0);
 
-// 20 Aug 2026 sits inside the cycle that opened on the 10th.
+// 20 Aug 2026 sits inside the August cycle — the calendar month.
 const cycle = getCycle(new Date(2026, 7, 20));
-check('the cycle under test runs 10 Aug -> 10 Sep', [cycle.start, cycle.end], ['2026-08-10', '2026-09-10']);
+check('the cycle under test runs 1 Aug -> 1 Sep', [cycle.start, cycle.end], ['2026-08-01', '2026-09-01']);
 
 // The user's real debt, trimmed to the first three instalments.
 const spaylater = {
@@ -69,17 +73,43 @@ const nextCycle = getCycle(new Date(2026, 8, 20));
 check('this cycle\'s decision says nothing about next cycle',
   plannedForCycle(planned200, nextCycle), 0);
 
-const cleared = setCyclePlan([planned200], 2, cycle.start, 0)[0];
-check('setting 0 clears the plan rather than storing a zero',
-  Object.keys(cleared.plan ?? {}).length, 0);
+// An EMPTY value is "no decision"; 0 is a decision. They used to be the same
+// thing, which made "I am not paying this one this month" unsayable — see
+// setCyclePlan in debts.js.
+const cleared = setCyclePlan([planned200], 2, cycle.start, '')[0];
+check('an empty value clears the plan', Object.keys(cleared.plan ?? {}).length, 0);
+check('...and null clears it too',
+  Object.keys(setCyclePlan([planned200], 2, cycle.start, null)[0].plan ?? {}).length, 0);
 
-// --- fixed: the amount is decided for you -----------------------------------
-near('a fixed debt takes the instalment falling inside the cycle',
+const zeroed = setCyclePlan([planned200], 2, cycle.start, 0)[0];
+check('0 is STORED, not treated as clearing', zeroed.plan[cycle.start], 0);
+check('...and reads back as 0 rather than falling through', plannedForCycle(zeroed, cycle), 0);
+check('a negative figure is floored at 0, never stored as owing you money',
+  setCyclePlan([ahMeng], 2, cycle.start, -50)[0].plan[cycle.start], 0);
+
+// --- fixed: the schedule suggests, you decide -------------------------------
+near('a fixed debt defaults to the instalment falling inside the cycle',
   plannedForCycle(spaylater, cycle), 299.30);
 near('an instalment dated after the cycle ends is not this cycle\'s problem',
   plannedForCycle(spaylater, nextCycle), 246.06);
 check('an instalment already ticked paid stops being planned',
   plannedForCycle({ ...spaylater, schedule: spaylater.schedule.map(i => ({ ...i, paid: true })) }, cycle), 0);
+
+// The 1 Sep 2026 change: "还钱什么我自己来定时间". A schedule fills the box in;
+// it no longer answers for him.
+const spayOverridden = setCyclePlan([spaylater], 1, cycle.start, 100)[0];
+check('typing over a fixed debt wins', plannedForCycle(spayOverridden, cycle), 100);
+near('...while the instalment table still says what it wanted',
+  scheduledForCycle(spayOverridden, cycle), 299.30);
+check('...and it is flagged as HIS figure, not the table showing through',
+  hasCyclePlan(spayOverridden, cycle), true);
+check('an untouched fixed debt is not flagged as chosen', hasCyclePlan(spaylater, cycle), false);
+check('paying nothing this month on a scheduled debt is sayable',
+  plannedForCycle(setCyclePlan([spaylater], 1, cycle.start, 0)[0], cycle), 0);
+near('clearing the override hands the cycle back to the table',
+  plannedForCycle(setCyclePlan([spayOverridden], 1, cycle.start, null)[0], cycle), 299.30);
+check('an override says nothing about the next cycle either',
+  Math.round(plannedForCycle(spayOverridden, nextCycle) * 100) / 100, 246.06);
 
 // --- repayments reduce what is owed -----------------------------------------
 const paid200 = [repayment(2, 200, '2026-08-12')];

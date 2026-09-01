@@ -289,7 +289,7 @@ check('autoShortfallDebt:true matches the absent default',
 // The complaint this answers, in the user's words: "不能只显示 RM1,864.28 然后
 // 叫我一次还掉；它本身就是分期债务". One number per item made an instalment plan
 // and money owed to a friend look like the same kind of demand.
-const wfCycle = getCycle(new Date(2026, 7, 20)); // 10 Aug -> 10 Sep
+const wfCycle = getCycle(new Date(2026, 7, 20)); // 1 Aug -> 1 Sep
 
 const spay = {
   id: 30, creditor: 'SPayLater',
@@ -299,7 +299,7 @@ const spay = {
     { due: '2026-10-10', amount: 262.68, paid: false },
   ],
 };
-const lcf = { id: 31, creditor: 'LCF', amount: 256, plan: { '2026-08-10': 50 } };
+const lcf = { id: 31, creditor: 'LCF', amount: 256, plan: { '2026-08-01': 50 } };
 const noPlan = { id: 32, creditor: 'Ah Meng', amount: 90 };
 
 const wf = getWaterfallOrder([], [spay, lcf, noPlan], null, [], wfCycle);
@@ -322,7 +322,7 @@ check('...and asks for nothing until you decide',
   r2(byLabel('Ah Meng').dueThisCycle), 0);
 
 // Never send the user to pay money that would bounce straight back.
-const nearlyDone = getWaterfallOrder([], [{ id: 33, creditor: 'X', amount: 30, plan: { '2026-08-10': 200 } }],
+const nearlyDone = getWaterfallOrder([], [{ id: 33, creditor: 'X', amount: 30, plan: { '2026-08-01': 200 } }],
   null, [], wfCycle);
 check('this cycle can never ask for more than is actually still owed',
   r2(nearlyDone[0].dueThisCycle), 30);
@@ -371,7 +371,7 @@ const spBills = [
 ];
 const spDebts = [
   { id: 1, creditor: 'SPayLater', schedule: [{ due: '2026-08-10', amount: 368.70, paid: false }] },
-  { id: 2, creditor: 'LCF', amount: 256, plan: { '2026-08-10': 50 } },
+  { id: 2, creditor: 'LCF', amount: 256, plan: { '2026-08-01': 50 } },
 ];
 
 const sp = computeSpendable({

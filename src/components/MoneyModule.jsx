@@ -709,7 +709,7 @@ export default function MoneyModule({
         <h2 style={{ fontSize: '1.4rem', fontWeight: '800' }}>Money Management</h2>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
           {view === 'today' ? (isToday ? "今天花了多少 · Today's spending" : `${describeDate(viewDate, today)}花了多少`)
-            : view === 'cycle' ? '这个月还能花多少 · Payday to payday'
+            : view === 'cycle' ? '这个月还能花多少 · 1 号到月底'
             : '我现在的状况 · Where I stand'}
         </p>
       </div>

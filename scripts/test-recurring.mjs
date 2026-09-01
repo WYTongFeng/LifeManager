@@ -17,14 +17,14 @@ const check = (name, got, want) => {
 };
 const r2 = n => Number(n.toFixed(2));
 
-// The cycle containing 20 Aug 2026 — payday is the 10th, so 10 Aug → 10 Sep.
+// The cycle containing 20 Aug 2026 — the calendar month, so 1 Aug → 1 Sep.
 const cycle = getCycle(new Date(2026, 7, 20));
-check('cycle runs payday to payday', [cycle.start, cycle.end], ['2026-08-10', '2026-09-10']);
+check('cycle runs 1st to 1st', [cycle.start, cycle.end], ['2026-08-01', '2026-09-01']);
 
 // --- defaults --------------------------------------------------------------
 const legacy = normalizeAllocation({ id: 1, label: 'Rent', amount: 500 });
 check('a pre-frequency bill is monthly', legacy.frequency, 'monthly');
-check('and defaults to payday, where the old model implicitly put it', legacy.dueDay, 10);
+check('and defaults to the 1st, where the old model implicitly put it', legacy.dueDay, 1);
 check('monthly bills are charged when due, not spread', legacy.costing, 'due');
 check('a yearly bill defaults to being spread',
   normalizeAllocation({ id: 2, label: 'Insurance', frequency: 'yearly' }).costing, 'spread');
@@ -37,11 +37,13 @@ check('next due from the 20th is next month',
   nextDueDate(rent, '2026-08-20'), '2026-09-15');
 check('days until due', daysUntilDue(rent, '2026-08-20'), 26);
 
-// A bill due on the 5th belongs to the cycle that started on the 10th of the
-// PREVIOUS month — i.e. it lands near the end of the cycle, not the start.
+// An early-in-the-month bill lands near the START of the cycle now that the
+// cycle is the calendar month. Under the old 10th → 10th cycle this same bill
+// fell on 5 SEPTEMBER, near the end — the case that made "which cycle does this
+// bill belong to" worth a test of its own.
 const early = { id: 2, label: 'Netflix', amount: 45, frequency: 'monthly', dueDay: 5 };
-check('a bill due on the 5th lands in September, inside this cycle',
-  dueDatesBetween(early, cycle.start, cycle.end), ['2026-09-05']);
+check('a bill due on the 5th lands on the 5th of this month',
+  dueDatesBetween(early, cycle.start, cycle.end), ['2026-08-05']);
 
 // --- the 31st problem ------------------------------------------------------
 // "The 31st" must clamp to the last real day, never roll into the next month
@@ -114,7 +116,7 @@ check('a bill that has not started yet charges nothing',
 // --- variable bills still work --------------------------------------------
 const utilities = {
   id: 10, label: '水电', variable: true, estimate: 250, frequency: 'monthly', dueDay: 18,
-  actuals: { '2026-08-10': 312.40 },
+  actuals: { '2026-08-01': 312.40 },
 };
 check('a confirmed real bill beats the estimate', r2(cycleCost(utilities, cycle).charged), 312.40);
 check('an unconfirmed cycle falls back to the estimate',
@@ -129,7 +131,7 @@ check('charged total is only what actually leaves this cycle',
 
 const soon = upcoming(all, cycle, { extra: [{ id: 'debt:1', label: 'SPayLater 分期', amount: 20.73, due: '2026-08-10', kind: 'debt' }] });
 check('upcoming is sorted by date, debts folded in', soon.slice(0, 4).map(u => u.due),
-  ['2026-08-10', '2026-08-10', '2026-08-15', '2026-08-17']);
+  ['2026-08-03', '2026-08-05', '2026-08-10', '2026-08-10']);
 check('the debt instalment appears alongside the bills',
   soon.some(u => u.kind === 'debt'), true);
 check('every upcoming row knows its account',

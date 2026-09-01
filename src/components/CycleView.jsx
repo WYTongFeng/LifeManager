@@ -80,7 +80,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
   // Everything the old model had no room for: when it comes out, how often,
   // from which account, and whether an annual cost should be reserved monthly.
   const [fFrequency, setFFrequency] = useState('monthly');
-  const [fDueDay, setFDueDay] = useState('10');
+  const [fDueDay, setFDueDay] = useState('1');
   const [fDueMonth, setFDueMonth] = useState('1');
   const [fOnceDate, setFOnceDate] = useState('');
   const [fAccountId, setFAccountId] = useState(null);
@@ -100,7 +100,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
   // Keyed on the live date, never `[]`. Everything on this screen is derived
   // from `cycle`, including the daily safe limit's divisor (`daysRemaining`),
   // so a cycle frozen at mount hands out a stale allowance every day the app
-  // stays open — and across the 10th it budgets the wrong cycle entirely.
+  // stays open — and once the month turns it budgets the wrong cycle entirely.
   // See useToday() in storage.js.
   // `todayStr` is a dependency the body never reads on purpose: getCycle()
   // takes the clock itself, so the date is the cache key. The linter reports it
@@ -319,15 +319,26 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
   // way to "200" doesn't briefly reserve RM2 and make the daily allowance jump
   // around under the user's fingers. Committed on blur.
   const [planDrafts, setPlanDrafts] = useState({});
+  const clearDraft = (debtId) => setPlanDrafts(p => {
+    const next = { ...p };
+    delete next[debtId];
+    return next;
+  });
   const commitPlan = (debtId) => {
     const draft = planDrafts[debtId];
     if (draft === undefined) return;
-    setDebts(setCyclePlan(loadJSON('debts', []), debtId, cycle.start, num(draft)));
-    setPlanDrafts(p => {
-      const next = { ...p };
-      delete next[debtId];
-      return next;
-    });
+    // An empty box is "no decision", which for a scheduled debt hands the cycle
+    // back to the instalment table. Anything typed — 0 included — is an answer,
+    // and `setCyclePlan` stores it as one. See debts.js.
+    const value = String(draft).trim() === '' ? null : num(draft);
+    setDebts(setCyclePlan(loadJSON('debts', []), debtId, cycle.start, value));
+    clearDraft(debtId);
+  };
+  // Back to whatever the instalment table says. Only offered where there IS a
+  // table — a flexible debt has nothing to fall back to.
+  const resetPlan = (debtId) => {
+    setDebts(setCyclePlan(loadJSON('debts', []), debtId, cycle.start, null));
+    clearDraft(debtId);
   };
 
   const [repayFor, setRepayFor] = useState(null);
@@ -339,7 +350,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
   //
   // That mattered because of how this user's money actually arrives: "我的钱
   // 什么时候进来是不固定的，我可能提前还，也可能之后才还". The statistical
-  // cycle is fixed on the 10th and stays fixed — but the DAY he pays is his,
+  // cycle is the calendar month and stays that — but the DAY he pays is his,
   // and a repayment filed on the wrong day lands in the wrong cycle's 本月已还
   // and moves the wrong day's account balance.
   const [repayDate, setRepayDate] = useState(todayStr);
@@ -385,7 +396,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
 
   const resetForm = () => {
     setEditingId(null); setFLabel(''); setFAmount(''); setFKind('income'); setFVariable(false);
-    setFFrequency('monthly'); setFDueDay('10'); setFDueMonth('1'); setFOnceDate('');
+    setFFrequency('monthly'); setFDueDay('1'); setFDueMonth('1'); setFOnceDate('');
     setFAccountId(defaultAccount(accounts)?.id ?? null); setFCosting('due');
     setFEssential(true);
   };
@@ -448,7 +459,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
   const changeFrequency = (value) => {
     setFFrequency(value);
     if (value === 'weekly') setFDueDay('1');
-    else if (fFrequency === 'weekly') setFDueDay('10');
+    else if (fFrequency === 'weekly') setFDueDay('1');
     setFCosting(['quarterly', 'halfyearly', 'yearly'].includes(value) ? 'spread' : 'due');
   };
 
@@ -703,7 +714,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                 <AlertTriangle size={14} color="var(--color-accent-red)" style={{ flexShrink: 0, marginTop: '1px' }} />
                 <span style={{ fontSize: '0.72rem', lineHeight: 1.5 }}>
                   这个周期已经超支 <strong>{money(Math.abs(budget.available))}</strong>。
-                  距离下次发薪还有 {cycle.daysRemaining} 天。
+                  这个月还剩 {cycle.daysRemaining} 天。
                 </span>
               </div>
             )}
@@ -933,16 +944,17 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
         })}
       </Section>
 
-      {/* Debt.
-          The two kinds are deliberately NOT presented the same way, because
-          they aren't the same. A schedule tells you what you owe this month; a
-          flexible debt asks you. Showing a "本月要还" figure you never chose
-          was the thing that made this section feel wrong — it invented a
-          commitment the debt never had. See debts.js. */}
+      {/* Debt — THE one place that answers "这个月我要还多少".
+          户口欠款 lists what is owed in total and owns the instalment tables;
+          it deliberately has no per-cycle box of its own any more, because two
+          screens asking the same question in the same words is what made this
+          feel 割裂. Both kinds of debt get the same box here: a schedule
+          pre-fills it and is shown underneath, but the figure is his.
+          See debts.js. */}
       {debtRows.some(r => !r.settled) && (
         <Section
           icon={<CalendarClock size={17} color="var(--color-accent-red)" />}
-          title="欠款 Debt"
+          title="这个月还债 Debt this month"
           empty={false}
         >
           {debtRows.filter(r => !r.settled).map(r => {
@@ -963,7 +975,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                         background: r.fixed ? 'var(--color-accent-red-soft)' : 'var(--color-money-soft)',
                         color: r.fixed ? 'var(--color-accent-red)' : 'var(--color-money)',
                       }}>
-                        {r.fixed ? '固定分期' : '想还多少还多少'}
+                        {r.fixed ? '有分期表' : '想还多少还多少'}
                       </span>
                     </div>
                     <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '2px' }}>
@@ -983,27 +995,47 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                   </div>
                 )}
 
-                {/* The figure this cycle reserves. Typed for a flexible debt,
-                    read off the schedule for a fixed one. */}
-                {r.fixed ? (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>本月要扣</span>
-                    <span style={{ fontWeight: '700', color: 'var(--color-accent-red)' }}>{money(r.planned)}</span>
+                {/* ONE box, both kinds — the figure this cycle actually
+                    reserves. A schedule fills it in for you and keeps saying
+                    what it wanted underneath; typing over it wins. */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.72rem' }}>
+                  <span style={{ color: 'var(--text-secondary)', flexShrink: 0 }}>这个月还</span>
+                  <input
+                    type="number" inputMode="decimal" min="0" placeholder="0.00"
+                    // `chosen` matters: a deliberate 0 must render as "0", not
+                    // as an empty box that reads like nothing was decided.
+                    value={draft ?? (r.chosen || r.planned > 0 ? String(round2(r.planned)) : '')}
+                    onChange={(e) => setPlanDrafts(p => ({ ...p, [r.debt.id]: e.target.value }))}
+                    onBlur={() => commitPlan(r.debt.id)}
+                    style={{
+                      ...inputStyle, marginTop: 0, padding: '6px 9px',
+                      fontSize: '0.78rem', textAlign: 'right',
+                    }}
+                  />
+                </label>
+                {r.suggested > 0 && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    gap: '8px', fontSize: '0.65rem', color: 'var(--text-muted)',
+                  }}>
+                    <span>
+                      分期表这个月是 {money(r.suggested)}
+                      {r.chosen && r.planned !== r.suggested && ' — 你改成上面那个了'}
+                    </span>
+                    {r.chosen && (
+                      <button
+                        type="button"
+                        onClick={() => resetPlan(r.debt.id)}
+                        style={{
+                          flexShrink: 0, padding: '3px 7px', borderRadius: 'var(--radius-sm)',
+                          background: 'var(--bg-input)', border: '1px solid var(--border-glass)',
+                          color: 'var(--text-secondary)', fontSize: '0.63rem', cursor: 'pointer',
+                        }}
+                      >
+                        用回分期表
+                      </button>
+                    )}
                   </div>
-                ) : (
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.72rem' }}>
-                    <span style={{ color: 'var(--text-secondary)', flexShrink: 0 }}>本月想还</span>
-                    <input
-                      type="number" inputMode="decimal" min="0" placeholder="0.00"
-                      value={draft ?? (r.planned || '')}
-                      onChange={(e) => setPlanDrafts(p => ({ ...p, [r.debt.id]: e.target.value }))}
-                      onBlur={() => commitPlan(r.debt.id)}
-                      style={{
-                        ...inputStyle, marginTop: 0, padding: '6px 9px',
-                        fontSize: '0.78rem', textAlign: 'right',
-                      }}
-                    />
-                  </label>
                 )}
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
@@ -1020,15 +1052,16 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                     className="btn-secondary"
                     style={{ padding: '6px 10px', fontSize: '0.72rem', width: '100%' }}
                   >
-                    <Banknote size={13} /> {r.remainingThisCycle > 0 ? `还这个月的 ${money(r.remainingThisCycle)}` : '记一笔还款'}
+                    <Banknote size={13} /> 记一笔还款
                   </button>
                 )}
               </div>
             );
           })}
           <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-            这里的钱在月头就先扣起来，摊到剩下的每一天 — 所以还款不会让某一天突然花不了钱，
+            你填多少，这个月就先扣起来，摊到剩下的每一天 — 所以还款不会让某一天突然花不了钱，
             而是整个月每天少一点。还了之后不会再扣第二次。
+            <strong>几时还、还多少，都是你自己决定</strong> — app 只负责记，不会催你。
             要改分期表或加新欠款，去「户口欠款」。
           </p>
         </Section>
@@ -1047,7 +1080,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
         >
           <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
             还欠 <strong>{money(repayFor.outstanding)}</strong>
-            {repayFor.planned > 0 && <> · 本月计划 {money(repayFor.planned)}，已还 {money(repayFor.repaid)}</>}
+            {repayFor.planned > 0 && <> · 这个月你填了 {money(repayFor.planned)}，已还 {money(repayFor.repaid)}</>}
           </p>
           <label style={labelStyle}>
             还多少
@@ -1063,7 +1096,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
               blocked. */}
           {num(repayAmount) > repayFor.remainingThisCycle && repayFor.remainingThisCycle > 0 && (
             <p style={{ fontSize: '0.66rem', color: 'var(--color-money)', lineHeight: 1.5 }}>
-              比这个月要还的多 {money(num(repayAmount) - repayFor.remainingThisCycle)} — 提早还，欠款会更快清完，
+              比你这个月填的多 {money(num(repayAmount) - repayFor.remainingThisCycle)} — 多还没问题，欠款会更快清完，
               这个月的每日额度也会跟着少一点。
             </p>
           )}

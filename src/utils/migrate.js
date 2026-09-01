@@ -187,7 +187,7 @@ function installRealRoutines() {
  * defaults it installs.
  */
 function cycleStartOn(d) {
-  const CYCLE_START_DAY = 10;
+  const CYCLE_START_DAY = 1;
   const start = new Date(d.getFullYear(), d.getMonth(), d.getDate());
   if (start.getDate() >= CYCLE_START_DAY) start.setDate(CYCLE_START_DAY);
   else { start.setMonth(start.getMonth() - 1); start.setDate(CYCLE_START_DAY); }

@@ -205,9 +205,18 @@ export function computeNetPosition(accounts = [], debts = [], expenses = [], sur
 }
 
 /**
- * Module 4 of the firewall spec: the debt waterfall. Every outstanding
- * obligation — real debts AND the shortfall owed back to a custodial
- * account's target — laid out **smallest-outstanding-first**.
+ * Every outstanding obligation — real debts AND the shortfall owed back to a
+ * custodial account's target — laid out **smallest-outstanding-first**.
+ *
+ * NOTE ON THE NAME: this was Module 4 of the firewall spec, the debt
+ * "waterfall", and 户口欠款 rendered it as one — a suggested payoff order with
+ * a per-cycle repayment box on every row. That screen is now a plain list of
+ * what is owed. Both halves of the waterfall went on 1 Sep 2026, for the same
+ * reason: the box duplicated 本月's word for word, and the order was the app
+ * volunteering an opinion about a decision the user had just said was his
+ * ("这个月我要还多少我会自己去算的"). The `plan` argument is what the removed
+ * UI wrote; every current caller passes null, and it is kept because a restored
+ * backup can still carry one.
  *
  * That's the "snowball" method, not "avalanche" (highest-interest-first):
  * this app has no interest-rate field to rank by cost, but more to the

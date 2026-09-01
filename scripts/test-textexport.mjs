@@ -52,11 +52,11 @@ const money = buildMoneyReport({
 });
 
 // --- the header states what the numbers mean -------------------------------
-// Without these the reader has to guess the currency and guess that a "month"
-// here runs 10th to 10th, and it will guess a calendar month.
+// Without these the reader has to guess the currency and guess what a "month"
+// here means, and the header says so outright.
 has('says the currency', money, 'MYR');
-has('says the cycle starts on payday, not the 1st', money, '每月 10 号');
-has('states the cycle dates', money, '2026-08-10 → 2026-09-10');
+has('says what a month means here', money, '日历月');
+has('states the cycle dates', money, '2026-08-01 → 2026-09-01');
 has('stamps when it was exported', money, '2026-08-25 14:30');
 
 // --- the three kinds of negative record are never conflated ----------------
@@ -159,16 +159,16 @@ check('...and carries the range when there is one, so two exports are tellable a
 
 // --- exporting a whole month -----------------------------------------------
 //
-// "整个月" in this app is the PAYDAY cycle, 10th to 10th. A rolling 30-day
+// "整个月" in this app is the calendar month. A rolling 30-day
 // window — which is what this used to offer — reaches back into the previous
-// cycle on any day after the 9th and silently mixes two budgets together.
+// month on every day but the 1st, and silently mixes two budgets together.
 const ranges = reportRanges(NOW);
 const byKey = Object.fromEntries(ranges.map(r => [r.key, r]));
 
-check('本月 is the payday cycle, not the calendar month',
-  [byKey.cycle.from, byKey.cycle.to], ['2026-08-10', '2026-09-10']);
+check('本月 is the calendar month',
+  [byKey.cycle.from, byKey.cycle.to], ['2026-08-01', '2026-09-01']);
 check('上个月 is the cycle before it',
-  [byKey.prev.from, byKey.prev.to], ['2026-07-10', '2026-08-10']);
+  [byKey.prev.from, byKey.prev.to], ['2026-07-01', '2026-08-01']);
 // The seam between them is the single most likely place for an off-by-one, and
 // a day counted twice is a day of spending invented out of nothing.
 check('the two months tile exactly — no gap, no overlap',
@@ -177,34 +177,34 @@ check('全部 has no bounds at all', [byKey.all.from, byKey.all.to], [null, null
 check('every option states the dates it covers',
   ranges.every(r => typeof r.hint === 'string' && r.hint.length > 0), true);
 
-// Records straddling the payday boundary: one on the last day of last cycle,
-// one on payday itself. Exactly one belongs to each month.
+// Records straddling the month boundary: one on the last day of last month,
+// one on the 1st. Exactly one belongs to each month.
 const straddling = [
-  { id: 90, merchant: '上个月最后一天', amount: 50, category: 'Food', date: '2026-08-09', time: '23:59' },
-  { id: 91, merchant: '发薪日当天', amount: 60, category: 'Food', date: '2026-08-10', time: '00:01' },
+  { id: 90, merchant: '上个月最后一天', amount: 50, category: 'Food', date: '2026-07-31', time: '23:59' },
+  { id: 91, merchant: '月头第一天', amount: 60, category: 'Food', date: '2026-08-01', time: '00:01' },
 ];
 const thisMonth = buildMoneyReport({ expenses: straddling, ...byKey.cycle, now: NOW });
 const lastMonth = buildMoneyReport({ expenses: straddling, ...byKey.prev, now: NOW });
 
-has('payday itself belongs to the new month', thisMonth, '发薪日当天');
-lacks('...and the 9th does not', thisMonth, '上个月最后一天');
-has('the 9th belongs to the old month', lastMonth, '上个月最后一天');
-lacks('...and payday does not', lastMonth, '发薪日当天');
+has('the 1st belongs to the new month', thisMonth, '月头第一天');
+lacks('...and the 31st does not', thisMonth, '上个月最后一天');
+has('the 31st belongs to the old month', lastMonth, '上个月最后一天');
+lacks('...and the 1st does not', lastMonth, '月头第一天');
 
 // The budget block must describe the month being exported, not whichever one
 // happens to be current — printing this month's income above last month's
 // transactions is the kind of wrong that reads as right.
-has('exporting 上个月 reports on the 7月10日 cycle', lastMonth, '2026-07-10 → 2026-08-10');
+has('exporting 上个月 reports on the July cycle', lastMonth, '2026-07-01 → 2026-08-01');
 has('...and says that cycle is over', lastMonth, '已结束');
 has('exporting 本月 says the cycle is still running', thisMonth, '还没过完');
 // The position in the cycle comes from TODAY, not from where the window opens.
 // Deriving it from the window's start date gave "第 1 / 31 天，还剩 31 天" on
 // the 25th — the right cycle, the wrong place in it.
-has('...at TODAY position in the cycle, not day one', thisMonth, '第 16 / 31 天');
+has('...at TODAY position in the cycle, not day one', thisMonth, '第 25 / 31 天');
 // A window spanning several cycles still reports the CURRENT one, because
 // "how am I doing" is a question about now.
 const threeMonths = buildMoneyReport({ expenses: straddling, ...byKey.three, now: NOW });
-has('a multi-month window still reports this cycle', threeMonths, '第 16 / 31 天');
+has('a multi-month window still reports this cycle', threeMonths, '第 25 / 31 天');
 has('...and includes records from the older months', threeMonths, '上个月最后一天');
 
 // A month's export must not be silently truncated to "the most recent N days".
@@ -229,8 +229,8 @@ has('...and the export says what window it covers', scoped, '这份涵盖');
 // The health side takes the same window, so the two reports line up by date.
 const monthHealth = buildHealthReport({
   meals: [
-    { id: 80, name: '上个月的饭', calories: 500, date: '2026-08-09', time: '12:00' },
-    { id: 81, name: '这个月的饭', calories: 600, date: '2026-08-10', time: '12:00' },
+    { id: 80, name: '上个月的饭', calories: 500, date: '2026-07-31', time: '12:00' },
+    { id: 81, name: '这个月的饭', calories: 600, date: '2026-08-01', time: '12:00' },
   ],
   workouts: [], ...byKey.cycle, now: NOW,
 });
