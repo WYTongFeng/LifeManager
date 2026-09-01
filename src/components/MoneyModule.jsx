@@ -217,20 +217,46 @@ export default function MoneyModule({
   const [confirmCloseProject, setConfirmCloseProject] = useState(null);
 
   /**
+   * The expense behind a project row, AS STORED.
+   *
+   * `getProjects()` hands back the expense spread with derived fields on top
+   * (repaidAmount, outstanding, myShare, isSettled…). Those are recomputed from
+   * the whole ledger on every read, so writing one back would persist — and
+   * sync — a snapshot that goes stale the next time a repayment lands. Every
+   * write below starts from the stored record, never from the row the UI holds.
+   */
+  const storedExpense = (id) => (allExpenses ?? expenses).find(e => e.id === id);
+
+  /**
    * End a project: nothing more is coming back, and whatever is left was mine.
    *
    * Stamps `closedAt` on the original expense — it does NOT create, delete or
    * adjust any record. The money already moved correctly; this only settles
    * the question of how much of it was ever the user's to count.
+   *
+   * WHY THIS GOES THROUGH onSaveExpense AND NOT setExpenses
+   * `setExpenses` is the today-only view (useTodayRecords in App.jsx): it hands
+   * a module the records dated today and splices the result back, so a `.map`
+   * over it can only ever see today. A project is fronted on one day and closed
+   * days later, once the repayments have stopped coming — so the id was never
+   * in the list being mapped, the map returned it unchanged, and the button did
+   * nothing at all, silently. Only a project created and closed on the SAME day
+   * ever worked, which is why this looked fine when it was built.
    */
   const closeProject = (project) => {
-    setExpenses(prev => prev.map(e => (e.id === project.id ? { ...e, closedAt: Date.now() } : e)));
+    const stored = storedExpense(project.id);
+    if (stored) onSaveExpense({ ...stored, closedAt: Date.now() });
     setConfirmCloseProject(null);
   };
 
   const reopenProject = (project) => {
+    const stored = storedExpense(project.id);
+    if (!stored) return;
+    // Dropped rather than set to null: `isClosed` tests `closedAt != null`, and
+    // a reopened project must look exactly like one that was never closed.
     // eslint-disable-next-line no-unused-vars
-    setExpenses(prev => prev.map(e => (e.id === project.id ? (({ closedAt: _c, ...rest }) => rest)(e) : e)));
+    const { closedAt: _closedAt, ...reopened } = stored;
+    onSaveExpense(reopened);
   };
 
   // Notification reader
