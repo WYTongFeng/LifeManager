@@ -60,7 +60,12 @@ export default defineConfig({
       // is still fetched in the background exactly the same way — the only
       // difference is that WE choose the moment to swap it in, on a tap.
       registerType: 'prompt',
-      includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
+      // `icon.svg` is the browser-tab favicon (index.html points at it) and the
+      // source every PNG below is generated from. It used to say `favicon.svg`,
+      // which was a starter-template lightning bolt that nothing referenced and
+      // that the service worker precached anyway — so the app shipped a second,
+      // completely different icon nobody could see but every install downloaded.
+      includeAssets: ['icon.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'LifeManager',
         short_name: 'LifeManager',

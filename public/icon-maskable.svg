@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <!-- Full-bleed background: Android applies its own mask, so no rounded corners
-       here. Text sits inside the 80% safe zone so it survives a circle crop. -->
-  <rect width="512" height="512" fill="#ff6b4a"/>
-  <text x="256" y="256" fill="#1a0f0a"
-        font-family="Outfit, 'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif"
-        font-size="168" font-weight="800" letter-spacing="-6"
-        text-anchor="middle" dominant-baseline="central">LM</text>
-</svg>

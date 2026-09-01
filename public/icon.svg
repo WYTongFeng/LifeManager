@@ -1,7 +1,103 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#ff6b4a"/>
-  <text x="256" y="256" fill="#1a0f0a"
-        font-family="Outfit, 'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif"
-        font-size="216" font-weight="800" letter-spacing="-8"
-        text-anchor="middle" dominant-baseline="central">LM</text>
+  <!--
+    The app icon: four life areas around one "done" mark.
+
+    WHY THIS IS AN SVG AND NOT THE PNG IT WAS DRAWN FROM
+    generate-icons.mjs rasterises this into every size the web app and the
+    Android launcher need — 192, 512, 180, plus five launcher densities and
+    five adaptive-icon foregrounds. A PNG source would have to be re-exported
+    by hand at each of those, and a checked-in binary can't be reviewed or
+    nudged. This file is the single source of truth; run `npm run icons` after
+    touching it.
+
+    THE FOUR SATELLITES MATCH THE FOUR MODULE COLOURS in index.css, so the icon
+    and the app agree about what colour 饮食 / 健身 / 记账 are:
+      leaf      green   饮食
+      dumbbell  blue    健身
+      clipboard amber   记录 / 提醒
+      wallet    purple  记账
+    The ring arcs take the colour of the icon they run toward, which is what
+    makes the four read as one system rather than four stickers.
+
+    Geometry is all measured from the centre (256, 256): the ring at r=148, the
+    check circle at r=66, and the satellites on the four compass points at 146.
+    Keep it that way — the maskable and foreground variants below re-use this
+    artwork scaled around the same centre, so an off-centre edit here shifts
+    both of them.
+  -->
+
+  <!-- The rounded square. Web and iOS want their own corner; Android ignores
+       this file and uses the maskable/foreground ones instead. -->
+  <rect width="512" height="512" rx="112" fill="#FAFAF7"/>
+
+  <g id="art">
+    <!-- ── the ring ───────────────────────────────────────────────────────
+         Four 70° arcs with a gap at each compass point, so each satellite sits
+         IN a gap rather than on top of a line. Round caps: a butt cap on a
+         10px stroke reads as a chopped-off end at 48px. -->
+    <g fill="none" stroke-width="10" stroke-linecap="round">
+      <!-- NW -> the leaf -->
+      <path d="M113.04 217.69 A148 148 0 0 1 217.69 113.04" stroke="#7CC576"/>
+      <!-- NE -> the dumbbell -->
+      <path d="M294.31 113.04 A148 148 0 0 1 398.96 217.69" stroke="#6BA5DB"/>
+      <!-- SE -> the clipboard -->
+      <path d="M398.96 294.31 A148 148 0 0 1 294.31 398.96" stroke="#F7C05A"/>
+      <!-- SW -> the wallet -->
+      <path d="M217.69 398.96 A148 148 0 0 1 113.04 294.31" stroke="#A99BE0"/>
+    </g>
+
+    <!-- ── centre: the check ──────────────────────────────────────────────
+         The circle is deliberately OPEN at the upper right and the check's long
+         arm runs out through the gap. A closed circle with the tick tucked
+         inside is the generic "success" glyph on every stock icon sheet; the
+         break is the whole reason this one is recognisable at 48px. -->
+    <g fill="none" stroke="#3A4551" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M321 244.5 A66 66 0 1 1 278.6 194" stroke-width="14"/>
+      <path d="M216 258 L243 288 L310 208" stroke-width="21"/>
+    </g>
+
+    <!-- ── top: leaf (饮食) ───────────────────────────────────────────────
+         A sprout, not a single leaf: two blades off one stem is what reads as
+         "growing" at small sizes, where a lone leaf reads as a generic tag. -->
+    <g>
+      <path d="M256 160 C 252 134, 256 110, 270 90" fill="none" stroke="#6BBE68" stroke-width="9" stroke-linecap="round"/>
+      <path d="M259 124 C 266 88, 286 65, 314 57 C 317 96, 297 119, 259 124 Z" fill="#7CC576"/>
+      <path d="M252 135 C 243 112, 227 97, 205 91 C 204 118, 222 135, 252 135 Z" fill="#96D28F"/>
+    </g>
+
+    <!-- ── right: dumbbell (健身) ─────────────────────────────────────────
+         Handle + inner plate + end cap on each side. Three pieces per side is
+         the fewest that still reads as a dumbbell rather than a bone. -->
+    <g fill="#5B9BD5">
+      <rect x="384" y="249.5" width="32" height="13" rx="3"/>
+      <rect x="371" y="235" width="15" height="42" rx="5"/>
+      <rect x="414" y="235" width="15" height="42" rx="5"/>
+      <rect x="356" y="242" width="11" height="28" rx="4.5"/>
+      <rect x="433" y="242" width="11" height="28" rx="4.5"/>
+    </g>
+
+    <!-- ── bottom: clipboard (记录) ───────────────────────────────────────
+         Outlined rather than solid, so the three rules inside stay visible.
+         A solid amber board loses them entirely below about 64px. -->
+    <g>
+      <rect x="222" y="371" width="68" height="77" rx="9" fill="#FFFFFF" stroke="#F5B23E" stroke-width="7.5"/>
+      <rect x="240" y="357" width="32" height="19" rx="6" fill="#F5B23E"/>
+      <circle cx="256" cy="356" r="6" fill="#F5B23E"/>
+      <g fill="#F5B23E">
+        <rect x="238" y="397" width="36" height="6" rx="3"/>
+        <rect x="238" y="411" width="36" height="6" rx="3"/>
+        <rect x="238" y="425" width="24" height="6" rx="3"/>
+      </g>
+    </g>
+
+    <!-- ── left: wallet (记账) ────────────────────────────────────────────
+         The clasp deliberately overhangs the body's right edge. Flush, the
+         whole thing is a rounded rectangle with a dot on it. -->
+    <g>
+      <rect x="74" y="226" width="78" height="62" rx="10" fill="#8B7CD8"/>
+      <rect x="84" y="234" width="52" height="5" rx="2.5" fill="#FFFFFF" opacity="0.55"/>
+      <rect x="124" y="246" width="34" height="24" rx="7" fill="#7A6BCC"/>
+      <circle cx="141" cy="258" r="4.5" fill="#FFFFFF"/>
+    </g>
+  </g>
 </svg>
