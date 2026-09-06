@@ -14,7 +14,7 @@
 //      project lives under "C:\Users\MacBook Pro\".
 
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, copyFileSync, statSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, readFileSync, statSync, rmSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -90,16 +90,42 @@ execSync(`${gradlew} assembleDebug --no-daemon`, {
   env: { ...process.env, JAVA_HOME, JAVA_TOOL_OPTIONS: `-javaagent:${agent}` },
 });
 
+/**
+ * Did this build actually produce an APK containing the web build we just made?
+ *
+ * mtime alone cannot answer that here. Windows updates a file's last-write time
+ * lazily — the gradle daemon is a separate, short-lived `java` process, and this
+ * one can stat the APK it wrote and still see the OLD timestamp for a moment
+ * after it exits. That false negative failed a perfectly good build on
+ * 2026-09-06. So ask the question that actually matters instead: vite gives the
+ * entry chunk a content hash, `cap sync` copies it to assets/public/, and a zip
+ * stores every entry's name as plain bytes — so a substring search over the APK
+ * proves the current dist is inside it, with no zip parsing and no clock.
+ */
+function embedsCurrentWebBuild() {
+  const html = resolve(ROOT, 'dist/index.html');
+  if (!existsSync(html)) return null; // nothing to compare against
+  const entry = readFileSync(html, 'utf8').match(/assets\/index-[A-Za-z0-9_-]+\.js/);
+  if (!entry) return null;
+  return readFileSync(APK).includes(`assets/public/${entry[0]}`);
+}
+
 // gradlew exits 0 even when the JVM never started, so the exit code proves
-// nothing. An unchanged mtime is what actually catches it.
+// nothing.
 if (!existsSync(APK)) throw new Error(`No APK produced at ${APK}.`);
-const after = statSync(APK).mtimeMs;
-if (after === before) {
+const embedded = embedsCurrentWebBuild();
+if (embedded === false) {
   throw new Error(
-    'gradlew exited 0 but the APK was not rewritten — the build did nothing. '
-    + 'Almost always the java agent failing to load; check the output above for '
-    + '"agent library failed Agent_OnLoad". See android/BUILD_NOTES.md.'
+    'gradlew exited 0 but the APK does not contain the web build in dist/ — the build '
+    + 'did nothing and the previous APK is still sitting there. Almost always the java '
+    + 'agent failing to load; check the output above for "agent library failed '
+    + 'Agent_OnLoad". See android/BUILD_NOTES.md.'
   );
+}
+if (embedded === null && statSync(APK).mtimeMs === before) {
+  // No dist to check against, so mtime is all there is — and it can lie (above).
+  console.warn('\nWARNING: could not confirm the APK was rebuilt (no dist/index.html '
+    + 'to match against, and its mtime did not move). Verify it by hand.\n');
 }
 
 console.log(`\nAPK built: ${APK} (${(statSync(APK).size / 1024 / 1024).toFixed(1)} MB)\n`);
