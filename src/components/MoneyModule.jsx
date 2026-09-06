@@ -904,6 +904,7 @@ export default function MoneyModule({
             Daily Cap:
             <input
               type="number"
+              step="0.01"
               inputMode="decimal"
               value={budgetDraft}
               onChange={(e) => setBudgetDraft(e.target.value)}

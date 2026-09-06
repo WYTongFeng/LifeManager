@@ -1001,7 +1001,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.72rem' }}>
                   <span style={{ color: 'var(--text-secondary)', flexShrink: 0 }}>这个月还</span>
                   <input
-                    type="number" inputMode="decimal" min="0" placeholder="0.00"
+                    type="number" step="0.01" inputMode="decimal" min="0" placeholder="0.00"
                     // `chosen` matters: a deliberate 0 must render as "0", not
                     // as an empty box that reads like nothing was decided.
                     value={draft ?? (r.chosen || r.planned > 0 ? String(round2(r.planned)) : '')}
@@ -1085,7 +1085,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
           <label style={labelStyle}>
             还多少
             <input
-              type="number" inputMode="decimal" min="0" autoFocus
+              type="number" step="0.01" inputMode="decimal" min="0" autoFocus
               value={repayAmount}
               onChange={(e) => setRepayAmount(e.target.value)}
               style={inputStyle}
