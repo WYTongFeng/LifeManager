@@ -1364,7 +1364,12 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
                 <label style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>重量 ({weightUnit})</label>
                 <input
                   type="number"
-                  step={weightUnit === 'lbs' ? '0.1' : '1'}
+                  // "any", not a fixed step: kg has 2.5 plates and 1.25 micro
+                  // plates, and the prefill below is `lastSet.weightKg` — a set
+                  // typed in lbs comes back as 27.215..., which any step at all
+                  // would reject, blocking the form on a number the app itself
+                  // put there.
+                  step="any"
                   inputMode="decimal"
                   value={weightUnit === 'lbs'
                     ? (effectiveWeight === '' ? '' : kgToLbs(parseFloat(effectiveWeight) || 0).toFixed(1))
@@ -1796,7 +1801,7 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
                 </div>
                 <div style={{ flex: 1 }}>
                   <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>身高 cm（选填）</label>
-                  <input type="number" value={heightDraft} onChange={(e) => setHeightDraft(e.target.value)} style={{ ...fieldStyle, padding: '10px 12px' }} />
+                  <input type="number" step="0.1" inputMode="decimal" value={heightDraft} onChange={(e) => setHeightDraft(e.target.value)} style={{ ...fieldStyle, padding: '10px 12px' }} />
                 </div>
               </div>
               <div>

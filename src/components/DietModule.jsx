@@ -1077,6 +1077,11 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
                 <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Calories (kcal)</label>
                 <input
                   type="number"
+                  // AI estimates come back with decimals ("452.5 kcal", "23.5g
+                  // protein") and get pasted straight in here, so nothing that
+                  // lands in these boxes may be rejected for having a point.
+                  step="any"
+                  inputMode="decimal"
                   placeholder="e.g. 450"
                   value={customCalories}
                   onChange={(e) => setCustomCalories(e.target.value)}
@@ -1104,6 +1109,8 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
                     <div key={label} style={{ flex: 1 }}>
                       <input
                         type="number"
+                        step="any"
+                        inputMode="decimal"
                         placeholder={label}
                         value={value}
                         onChange={(e) => set(e.target.value)}
