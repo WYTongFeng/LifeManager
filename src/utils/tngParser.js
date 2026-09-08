@@ -84,25 +84,23 @@ const NOISE_RE = [
   /免费/,              // free
   /积分/,              // loyalty points
   /从\s*(?:RM|MYR)\s*[\d,.]+\s*起/, // "from RM300" — an advertised price, not a charge
+  // "资金支入成功 / 您已成功支入RMx到您的GO+账户" — TNG's sweep into its GO+
+  // sub-account. IGNORED, by the user's explicit instruction on 2026-09-09:
+  // 「go+不要理，每天会多几毛，最后我最后一天会一次过自己加」.
+  //
+  // It fires for two different things and neither is worth a row. Most days it
+  // is a few sen of interest, so surfacing it at all would put a junk entry in
+  // 待确认 every single day. On the days it isn't, it is a SWEEP — 24.01 on
+  // 8 Sep, against transfers of 18.00 and 6.00 the same day — so it is an
+  // aggregate of money already announced by its own notifications, and logging
+  // it would double the day.
+  //
+  // The cost of ignoring it is real and he has accepted it: an inflow that TNG
+  // announces ONLY here never reaches the app. That is fine because GO+ carries
+  // a running balance he can read directly, and he reconciles it by hand at the
+  // end of the month. Do not re-surface this without asking him first.
+  /支入.{0,20}GO\+\s*账户/,
 ];
-
-// "资金支入成功 / 您已成功支入RMx到您的GO+账户" — TNG's own sweep into its GO+
-// sub-account.
-//
-// THIS USED TO BE A NOISE RULE, AND THAT LOST MONEY.
-// The reasoning was that it always fires alongside a richer notification for
-// the same money ("您有一项支入 / 您已收到RMx 来自 <人名> 用于 <用途>"), so
-// dropping it avoided a double count. That holds only while the pair really
-// does always arrive. When it doesn't — a bank reload swept straight into GO+,
-// a notification the phone never handed over — the ONLY message about that
-// money said nothing, and the inflow vanished with no trace anywhere in the
-// app. The user, on exactly this: 「目前钱进入tng的判定不好」.
-//
-// Silently discarding real money is the worse failure of the two, and the
-// duplicate has a cheap answer that discarding does not: income now waits in
-// the review queue instead of being logged automatically, so a genuine pair
-// shows up as two rows he dismisses one of. Naming the risk beats hiding it.
-const GOPLUS_SWEEP_RE = /支入.{0,20}GO\+\s*账户/;
 
 // Money moving INTO the wallet, said as a direction rather than as a verb.
 //
@@ -501,14 +499,7 @@ export function categorise(merchant, learned = {}) {
  */
 export function parseTngNotification(text, learned = {}) {
   const raw = (text || '').trim();
-  const base = {
-    amount: null, merchant: null, category: null, isTransfer: false,
-    needsPurpose: false,
-    // Only ever true on the GO+ sweep: real money, possibly already reported by
-    // a second notification about the same ringgit. The UI says so rather than
-    // the parser choosing for you — see GOPLUS_SWEEP_RE.
-    possibleDuplicate: false,
-  };
+  const base = { amount: null, merchant: null, category: null, isTransfer: false, needsPurpose: false };
 
   if (!raw) {
     return { ...base, kind: 'unknown', reason: 'Nothing to read.' };
@@ -520,20 +511,6 @@ export function parseTngNotification(text, learned = {}) {
     return {
       ...base, kind: 'noise',
       reason: 'Reads as marketing or loyalty points, not a transaction.',
-    };
-  }
-
-  // The GO+ sweep. Real money in, said in TNG's most useless wording — no
-  // sender, no purpose, and possibly a second notification about the same
-  // ringgit. It used to be discarded outright, which lost the inflow whenever
-  // the pair failed to arrive. Flagged instead: income, marked as a possible
-  // duplicate, and parked for review rather than logged.
-  if (GOPLUS_SWEEP_RE.test(raw)) {
-    return {
-      ...base, kind: 'income', amount, possibleDuplicate: true,
-      reason: amount
-        ? `RM ${amount.toFixed(2)} 进了 TNG 的 GO+ 户口。同一笔钱有时会另外再发一则通知（写着谁转给你、用途），如果你已经记过那一笔，把这个删掉就好。`
-        : 'GO+ 户口有一笔进账，但读不到金额。',
     };
   }
 
@@ -664,7 +641,7 @@ export const SAMPLE_NOTIFICATIONS = [
     text: "Touch 'n Go eWallet\nReload successful! RM100.00 has been added to your TNG eWallet balance.",
   },
   {
-    label: 'GO+ sweep (money IN — flagged as a possible duplicate of the one below)',
+    label: 'GO+ (must be ignored — daily interest, and a sweep of the transfers below)',
     text: '资金支入成功\n您已成功支入RM10.88到您的GO+账户',
   },
   {

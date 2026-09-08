@@ -535,19 +535,6 @@ export default function TngAutoCapture({
                   </div>
                 )}
 
-                {/* Two notifications, one ringgit. Said on the card rather
-                    than resolved behind his back — the parser cannot know
-                    whether the other one arrived. */}
-                {item.possibleDuplicate && (
-                  <div style={{
-                    fontSize: '0.66rem', color: 'var(--color-accent-amber)', marginTop: '8px',
-                    lineHeight: 1.5,
-                  }}>
-                    这是 GO+ 那则通知。同一笔钱有时会另外再发一则（写着谁转给你），
-                    如果那笔你已经记了，这个按垃圾桶删掉就好。
-                  </div>
-                )}
-
                 <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
                   <div style={{ flex: 1 }}>
                     <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>

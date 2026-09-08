@@ -130,11 +130,7 @@ function processCapture(payload, ctx) {
   // missing from one — a balance that is too high is the reassuring direction.
   // One tap to confirm, one to dismiss the duplicate.
   if (parsed.kind === 'income' && parsed.amount) {
-    queueItem({
-      isMoneyIn: true,
-      category: FALLBACK_INCOME_CATEGORY,
-      possibleDuplicate: Boolean(parsed.possibleDuplicate),
-    });
+    queueItem({ isMoneyIn: true, category: FALLBACK_INCOME_CATEGORY });
     return;
   }
 

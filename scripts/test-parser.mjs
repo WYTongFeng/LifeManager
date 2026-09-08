@@ -65,9 +65,8 @@ const cases = [
   ["收款成功\nRM 120.00 已转入您的钱包。", 'income', 120, null, false, null],
   ["You have received a transfer of RM75.00 to your TNG eWallet.", 'income', 75, null, false, null],
 
-  // The one that used to be thrown away. Real money in, in TNG's least useful
-  // wording — kept now, flagged as a possible duplicate rather than discarded.
-  ["资金支入成功\n您已成功支入RM10.88到您的GO+账户", 'income', 10.88, null, false, null],
+  // GO+ stays ignored — see the RM24.01 case further down for why.
+  ["资金支入成功\n您已成功支入RM10.88到您的GO+账户", 'noise', null, null, false, null],
 
   // --- Captured verbatim from the user's TNG inbox on 2026-09-08 ----------
   // Eleven consecutive notifications, screenshotted and handed over. Four
@@ -101,7 +100,14 @@ const cases = [
   ["您有一项支入\n您已收到RM 18.00 来自 WONG JIN JIE 用于 甜品。", 'income', 18, 'WONG JIN JIE', false, null],
   ["汇款成功\nRM 6.00已成功汇款到 NGO KAR HONG。", 'spend', 6, 'Ngo Kar Hong', true, 'transfer-person'],
   ["您有一项支入\n您已收到RM 6.00 来自 NGO KAR HONG 用于 资金周转。", 'income', 6, 'NGO KAR HONG', false, null],
-  ["资金支入成功\n您已成功支入RM24.01到您的GO+账户", 'income', 24.01, null, false, null],
+
+  // GO+ is ignored outright, by his instruction on 2026-09-09. Most days it is
+  // a few sen of interest — surfacing it would put a junk row in 待确认 daily.
+  // On the days it isn't, it is a SWEEP: this RM24.01 landed the same day as
+  // the RM18.00 and RM6.00 transfers above, so logging it would double them.
+  // He reconciles the GO+ balance by hand at month end.
+  ["资金支入成功\n您已成功支入RM24.01到您的GO+账户", 'noise', null, null, false, null],
+  ["资金支入成功\n您已成功支入RM0.32到您的GO+账户", 'noise', null, null, false, null],
 
   // ...and the direction rule must NOT swallow ordinary payments. These all
   // mention 您 / your and are still money leaving.
