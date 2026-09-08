@@ -110,7 +110,76 @@ export function normalizeAllocation(a, cycleStartDay = 1) {
     // would lose its history) — it just ends.
     endDate: a.endDate ?? null,
     startDate: a.startDate ?? null,
+    // 「这个月算不算」 — a per-cycle off switch, keyed by cycle start exactly
+    // like `actuals`, and for the same reason: a decision about September must
+    // not silently become a decision about October.
+    //
+    // WHY IT ISN'T A SINGLE BOOLEAN
+    // A bill you skip one month is not a bill you cancelled. `endDate` already
+    // covers cancelling; deleting covers a mistake. What had no home was "this
+    // one doesn't apply THIS month" — the housemate paid it, it was bundled
+    // into something else, the shop is closed. Without it the only ways to say
+    // so were to delete the bill (losing every past cycle it did apply to) or
+    // to leave it in and quietly over-reserve the month.
+    //
+    // Default is ON. The bills that recur every month — rent, Spotify — should
+    // need no action at all; the switch is for the exceptions.
+    //
+    // MUST be listed here, like every other field: this normalizer builds an
+    // explicit object rather than spreading `...a`, so anything unnamed is
+    // deleted on every read.
+    skipped: a.skipped && typeof a.skipped === 'object' ? a.skipped : {},
   };
+}
+
+/** Is this bill switched off for the cycle starting on `cycleStart`? */
+export function isSkippedForCycleStart(allocation, cycleStart) {
+  return Boolean(allocation?.skipped?.[cycleStart]);
+}
+
+/** Is this bill switched off for this cycle? */
+export function isSkippedInCycle(allocation, cycle) {
+  return Boolean(cycle) && isSkippedForCycleStart(allocation, cycle.start);
+}
+
+/**
+ * Switch one bill on or off for one cycle.
+ *
+ * Switching back ON deletes the key rather than storing `false`, so the stored
+ * map only ever holds the exceptions — a bill that was never touched and a bill
+ * that was switched off and back on read identically, which is what they mean.
+ */
+export function setCycleSkip(allocations = [], id, cycleStart, skip) {
+  return allocations.map(a => {
+    if (String(a.id) !== String(id)) return a;
+    const skipped = { ...(a.skipped ?? {}) };
+    if (skip) skipped[cycleStart] = true;
+    else delete skipped[cycleStart];
+    return { ...a, skipped };
+  });
+}
+
+/**
+ * Write (or clear) what this bill REALLY cost this cycle.
+ *
+ * An empty value clears the decision and hands the cycle back to the estimate —
+ * the only way back once a wrong figure has been confirmed. A stored 0 is a
+ * real answer ("it came to nothing this month"), which is why the caller's
+ * empty-check is `== null || === ''` and not truthiness. Same rule, and the
+ * same reasoning, as `setCyclePlan` in debts.js.
+ *
+ * Only meaningful for a variable bill; a fixed one has one amount and no
+ * per-cycle question to answer.
+ */
+export function setCycleActual(allocations = [], id, cycleStart, amount) {
+  const cleared = amount == null || amount === '';
+  return allocations.map(a => {
+    if (String(a.id) !== String(id)) return a;
+    const actuals = { ...(a.actuals ?? {}) };
+    if (cleared) delete actuals[cycleStart];
+    else actuals[cycleStart] = num(amount);
+    return { ...a, actuals };
+  });
 }
 
 /** This cycle's per-occurrence amount: the real bill if known, else the estimate. */
@@ -223,11 +292,21 @@ export function daysUntilDue(allocation, fromDate) {
 export function cycleCost(allocation, cycle) {
   const a = normalizeAllocation(allocation);
   const per = resolveAmount(a, cycle);
+
+  // Switched off for this cycle: it costs nothing and lands on no date, so it
+  // drops out of the budget, the calendar, the spendable figure and the
+  // reminders in one move — every one of those reads this function or the
+  // dates it returns. `per` is still reported so the row can print what it
+  // WOULD have cost, which is the whole point of a switch you can see.
+  if (isSkippedInCycle(a, cycle)) {
+    return { per, dates: [], charged: 0, budgeted: 0, spread: false, skipped: true };
+  }
+
   const dates = dueDatesBetween(a, cycle.start, cycle.end);
   const charged = per * dates.length;
 
   if (a.costing !== 'spread') {
-    return { per, dates, charged, budgeted: charged, spread: false };
+    return { per, dates, charged, budgeted: charged, spread: false, skipped: false };
   }
 
   // Set aside one cycle's share of the annual cost, every cycle, forever —
@@ -236,7 +315,7 @@ export function cycleCost(allocation, cycle) {
   // would over-reserve).
   const perYear = occurrencesPerYear(a.frequency);
   const budgeted = perYear > 0 ? (per * perYear) / 12 : charged;
-  return { per, dates, charged, budgeted, spread: true };
+  return { per, dates, charged, budgeted, spread: true, skipped: false };
 }
 
 /**
@@ -248,6 +327,9 @@ export function upcoming(allocations, cycle, { extra = [], limit = 12 } = {}) {
   const out = [];
   for (const raw of allocations) {
     const a = normalizeAllocation(raw);
+    // A bill switched off for this cycle isn't coming out on any day of it, so
+    // it has no business on the calendar. Same reason cycleCost zeroes it.
+    if (isSkippedInCycle(a, cycle)) continue;
     const per = resolveAmount(a, cycle);
     for (const due of dueDatesBetween(a, cycle.start, cycle.end)) {
       out.push({

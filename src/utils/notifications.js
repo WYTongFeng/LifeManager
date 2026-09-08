@@ -51,7 +51,10 @@ import {
   normalizeSupplements, isScheduledOn, pendingTimes, isLowStock,
   describeDose, dosesRemaining, formMeta,
 } from './supplements.js';
-import { normalizeAllocation, dueDatesBetween, resolveAmount } from './recurring.js';
+import {
+  normalizeAllocation, dueDatesBetween, resolveAmount, isSkippedForCycleStart,
+} from './recurring.js';
+import { getCycle } from './cycle.js';
 import { nudgeOccurrences, outstandingNudges, normalizeNudgeSettings, NUDGE_KINDS } from './nudges.js';
 
 // --------------------------------------------------------------------------
@@ -394,6 +397,12 @@ function billItems({ allocations, cycle, now, horizonDays, settings }) {
     if (!a.id) continue;
     const amount = cycle ? resolveAmount(a, cycle) : num(a.amount) || num(a.estimate);
     for (const due of dueDatesBetween(a, today, until)) {
+      // Switched off for the cycle that due date falls in — see recurring.js.
+      // Resolved per date rather than against the passed-in `cycle`, because
+      // the horizon reaches into next month and a bill skipped in September
+      // still has to be reminded about in October.
+      const [dy, dm, dd] = due.split('-').map(Number);
+      if (isSkippedForCycleStart(a, getCycle(new Date(dy, dm - 1, dd)).start)) continue;
       const warnDate = shiftDate(due, -s.bills.daysBefore);
       const at = occurrenceAtLocal(warnDate, s.bills.time);
       if (at == null || at <= now) continue;

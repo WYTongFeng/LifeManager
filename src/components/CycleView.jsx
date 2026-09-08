@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   Plus, Trash2, Pencil, X, CalendarClock, ArrowDownToLine,
-  ArrowUpFromLine, Lock, Check, AlertTriangle, Banknote,
+  ArrowUpFromLine, Lock, Check, AlertTriangle, Banknote, Square, CheckSquare,
 } from '../utils/icons';
 import { useLiveJSON, useToday, saveJSON, loadJSON } from '../utils/storage';
 import { num, newId } from '../utils/num';
@@ -11,7 +11,7 @@ import {
 } from '../utils/cycle';
 import {
   FREQUENCIES, frequencyMeta, normalizeAllocation, cycleCost, isEstimated,
-  nextDueDate, daysUntilDue, upcoming,
+  nextDueDate, daysUntilDue, upcoming, setCycleSkip, setCycleActual,
 } from '../utils/recurring';
 import { nextInstalment } from '../utils/networth';
 import { debtsForCycle, setCyclePlan, makeRepayment } from '../utils/debts';
@@ -163,6 +163,14 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
       dueDates: cost.dates,
       spread: cost.spread,
       estimated: isEstimated(a, cycle),
+      // Switched off for this cycle. `cost` is already zeroed by cycleCost, so
+      // nothing downstream needs to know — this flag is purely so the row can
+      // say so instead of the bill silently vanishing from every total.
+      skipped: Boolean(cost.skipped),
+      // What it WOULD have cost if it were on, for the row to print beside the
+      // switch. A switch you can't see the consequence of is a switch you stop
+      // trusting.
+      wouldCost: cost.skipped ? cost.per : null,
       nextDue: nextDueDate(a),
       daysUntil: daysUntilDue(a),
     };
@@ -467,16 +475,48 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
     e.preventDefault();
     const amount = Number(fActual);
     if (!Number.isFinite(amount) || amount <= 0 || !actualFor) return;
-    setAllocations(allocations.map(a => (a.id === actualFor.id
-      ? { ...a, actuals: { ...(a.actuals || {}), [cycle.start]: amount } }
-      : a)));
+    setAllocations(setCycleActual(loadJSON('allocations', []), actualFor.id, cycle.start, amount));
+    setActualFor(null); setFActual('');
+  };
+
+  /**
+   * Throw away this cycle's confirmed figure and go back to the estimate.
+   *
+   * The way out of a wrong confirmation, and there was none. Once an actual
+   * was stored it won over the estimate forever (`resolveAmount`), so editing
+   * 预期金额 afterwards changed the number on screen by nothing at all and gave
+   * no hint why — the exact thing the user hit: 「我要改预期金额…导致记录成
+   * 以前的」.
+   */
+  const clearActual = () => {
+    if (!actualFor) return;
+    setAllocations(setCycleActual(loadJSON('allocations', []), actualFor.id, cycle.start, null));
     setActualFor(null); setFActual('');
   };
 
   const togglePaid = (a) => {
-    setAllocations(allocations.map(x =>
-      x.id === a.id ? { ...x, paidFor: x.paidFor === cycle.start ? null : cycle.start } : x));
+    setAllocations(loadJSON('allocations', []).map(x =>
+      String(x.id) === String(a.id)
+        ? { ...x, paidFor: x.paidFor === cycle.start ? null : cycle.start }
+        : x));
   };
+
+  /**
+   * 「这个月算不算」. Switching a bill off drops it out of the reserve, the
+   * calendar, 现在能花 and its reminder — see cycleCost in recurring.js — and
+   * says nothing about any other month.
+   */
+  const toggleSkip = (a) => {
+    setAllocations(setCycleSkip(loadJSON('allocations', []), a.id, cycle.start, !a.skipped));
+  };
+
+  // The bill the edit form is currently open on, re-derived from the live list
+  // rather than captured when the form opened — the form has to be able to say
+  // whether THIS cycle's real figure has already been confirmed, and that can
+  // change under it (from 记账, now that logging a payment writes it).
+  const editingAlloc = allocModal && editingId
+    ? manualAllocations.find(a => String(a.id) === String(editingId)) ?? null
+    : null;
 
   const hasSetup = incomeSources.length > 0 || allAllocations.length > 0;
 
@@ -904,24 +944,33 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
             <Row
               key={a.id}
               title={a.label}
-              subtitle={
-                <>
-                  {when}
-                  {soon && <> · <strong style={{ color: a.daysUntil <= 3 ? 'var(--color-accent-red)' : 'var(--text-secondary)' }}>{soon}</strong></>}
-                  {a.spread && a.charged !== a.budgeted && <> · 每期预留 {money(a.budgeted)}</>}
-                  {a.estimated && ' · 预估金额'}
-                  {a.essential === false && <> · <span style={{ color: 'var(--color-accent-amber)' }}>非必要</span></>}
-                  {a.paid && ' · 本期已付'}
-                </>
-              }
-              subtitleColor={a.estimated ? 'var(--color-diet)' : a.paid ? 'var(--color-money)' : 'var(--text-muted)'}
+              // A switched-off bill has nothing to say about due dates, paid
+              // status or estimates — it isn't happening this month. It says
+              // one thing instead: what turning it back on would cost.
+              subtitle={a.skipped
+                ? <>这个月不算{a.wouldCost > 0 && <> · 打开是 {money(a.wouldCost)}</>}</>
+                : (
+                  <>
+                    {when}
+                    {soon && <> · <strong style={{ color: a.daysUntil <= 3 ? 'var(--color-accent-red)' : 'var(--text-secondary)' }}>{soon}</strong></>}
+                    {a.spread && a.charged !== a.budgeted && <> · 每期预留 {money(a.budgeted)}</>}
+                    {a.estimated && ' · 预估金额'}
+                    {a.essential === false && <> · <span style={{ color: 'var(--color-accent-amber)' }}>非必要</span></>}
+                    {a.paid && ' · 本期已付'}
+                  </>
+                )}
+              subtitleColor={a.skipped ? 'var(--text-muted)' : a.estimated ? 'var(--color-diet)' : a.paid ? 'var(--color-money)' : 'var(--text-muted)'}
               badge={<AccountChip accounts={accounts} accountId={a.accountId} size="xs" />}
-              amount={money(a.charged > 0 ? a.charged : a.budgeted)}
-              amountColor="var(--color-diet)"
-              dashed={a.estimated}
-              onToggle={() => togglePaid(a)}
+              amount={a.skipped ? money(0) : money(a.charged > 0 ? a.charged : a.budgeted)}
+              amountColor={a.skipped ? 'var(--text-muted)' : 'var(--color-diet)'}
+              dashed={a.estimated || a.skipped}
+              active={!a.skipped}
+              onToggleActive={() => toggleSkip(a)}
+              // Both of these are statements about a bill that IS happening
+              // this month, so neither is offered on one that isn't.
+              onToggle={a.skipped ? null : () => togglePaid(a)}
               toggled={a.paid}
-              onConfirmActual={a.variable ? () => {
+              onConfirmActual={a.variable && !a.skipped ? () => {
                 setActualFor(a);
                 setFActual(String(a.resolvedAmount));
               } : null}
@@ -1334,6 +1383,24 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
               ? '帐单来了之后，在列表里按 💰 输入这期实际金额 — 每日额度会自动改用真实数字，不用重新建一笔。'
               : '不管有没有打勾「已付」，都会从可花额度里扣掉 — 还没付不代表不用付。'}
           </p>
+
+          {/* The silent no-op, said out loud.
+              A confirmed actual beats the estimate for that cycle, forever. So
+              on a bill whose figure is already confirmed, changing 预期金额
+              here is correct AND changes this month by nothing — which reads
+              as the app ignoring you. It is exactly what the user hit. */}
+          {fVariable && editingAlloc && !editingAlloc.estimated && (
+            <div style={{
+              padding: '0.6rem 0.7rem', borderRadius: 'var(--radius-sm)',
+              background: 'var(--color-accent-amber-soft)',
+              border: '1px solid var(--color-accent-amber)',
+              fontSize: '0.67rem', lineHeight: 1.55,
+            }}>
+              这个月已经确认过实际金额 <strong>{money(editingAlloc.resolvedAmount)}</strong>，
+              所以改上面的预期金额<strong>只影响以后的月份</strong>，这个月不会动。
+              要改这个月，关掉这里再按那笔的 💰。
+            </div>
+          )}
         </FormModal>
       )}
 
@@ -1348,6 +1415,27 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
             只会套用在<strong>这个周期</strong>（{cycle.start} → {cycle.end}）。
             下期没有帐单前，会先用预估金额。
           </p>
+          {/* The way back. Once a real figure is stored it beats the estimate
+              forever (resolveAmount), so without this, editing 预期金额 on a
+              bill you had already confirmed changed the screen by nothing and
+              said nothing about why. */}
+          {!actualFor.estimated && (
+            <div style={{
+              padding: '0.6rem 0.7rem', borderRadius: 'var(--radius-sm)',
+              background: 'var(--bg-input)', border: '1px solid var(--border-glass)',
+            }}>
+              <p style={{ fontSize: '0.67rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                这个月已经确认过实际金额了，所以<strong>改「预期金额」不会动这个月</strong>的数字 —
+                要改就改上面这一栏。
+              </p>
+              <button
+                type="button" onClick={clearActual} className="btn-secondary"
+                style={{ marginTop: '8px', fontSize: '0.7rem', padding: '0.4rem 0.7rem' }}
+              >
+                取消这期的实际金额，回去用预估
+              </button>
+            </div>
+          )}
         </FormModal>
       )}
     </div>
@@ -1383,7 +1471,7 @@ function Section({ icon, title, onAdd, empty, children }) {
 
 function Row({
   title, subtitle, subtitleColor, amount, amountColor, dashed, badge,
-  onEdit, onDelete, onToggle, toggled, onConfirmActual,
+  onEdit, onDelete, onToggle, toggled, onConfirmActual, onToggleActive, active = true,
 }) {
   return (
     <div
@@ -1393,11 +1481,38 @@ function Row({
         padding: '0.75rem 0.9rem', display: 'flex', justifyContent: 'space-between',
         alignItems: 'center', gap: '10px', cursor: onEdit ? 'pointer' : 'default',
         borderStyle: dashed ? 'dashed' : 'solid',
+        // Switched off for this cycle. Faded rather than hidden: a bill you
+        // told the app to ignore this month still has to be findable, or the
+        // only way to turn it back on is to remember it exists.
+        opacity: active ? 1 : 0.45,
       }}
     >
-      <div style={{ minWidth: 0 }}>
+      {/* 「这个月算不算」. A tick on the left, where a list of things to
+          include belongs, and deliberately NOT the same control as 已付 on the
+          right — one says whether the money is owed at all this month, the
+          other says whether it has gone yet. */}
+      {onToggleActive && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleActive(); }}
+          aria-label={active ? `这个月不算 ${title}` : `这个月要算 ${title}`}
+          title={active ? '这个月要算 — 按一下改成不算' : '这个月不算 — 按一下改回要算'}
+          style={{
+            flexShrink: 0, background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+            color: active ? 'var(--color-money)' : 'var(--text-muted)',
+            display: 'flex', alignItems: 'center',
+          }}
+        >
+          {active ? <CheckSquare size={17} /> : <Square size={17} />}
+        </button>
+      )}
+      <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-          <h4 style={{ fontSize: '0.86rem', fontWeight: '700' }}>{title}</h4>
+          <h4 style={{
+            fontSize: '0.86rem', fontWeight: '700',
+            textDecoration: active ? 'none' : 'line-through',
+          }}>
+            {title}
+          </h4>
           {badge}
         </div>
         <span style={{ fontSize: '0.67rem', color: subtitleColor }}>{subtitle}</span>

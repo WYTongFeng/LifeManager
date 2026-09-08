@@ -5,7 +5,7 @@ import {
   Info, ArrowDownLeft, Wallet, HelpCircle, ArrowRightLeft, Copy,
 } from '../utils/icons';
 import confetti from 'canvas-confetti';
-import { usePersistentState, useLiveJSON, saveJSON, useToday } from '../utils/storage';
+import { usePersistentState, useLiveJSON, saveJSON } from '../utils/storage';
 import { num, sumBy, newId } from '../utils/num';
 import { nowTimeStr, toHHMM, shiftDate, describeDate, sortByTime } from '../utils/datetime';
 import {
@@ -32,6 +32,7 @@ import {
 } from '../utils/projects';
 import { isNativeAvailable } from '../utils/tngNative';
 import { getCycle } from '../utils/cycle';
+import { setCycleActual } from '../utils/recurring';
 
 const inputStyle = {
   width: '100%',
@@ -114,9 +115,10 @@ export default function MoneyModule({
   // would drift. See storage.js.
   const incomeSources = useLiveJSON('incomeSources', []);
   const allocations = useLiveJSON('allocations', []);
-  const liveToday = useToday();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const cycle = useMemo(() => getCycle(), [liveToday]);
+  // No screen-wide `cycle` here on purpose. The one thing this file does with
+  // cycles — stamping a bill payment onto the right month — has to use the
+  // cycle the PAYMENT falls in, not today's, or a payment filed late at the
+  // turn of the month sets the wrong month's rent. It computes its own.
   // Whether this device can capture notifications by itself. Drives the wording
   // everywhere below — on a phone the paste box is a fallback, in a browser
   // it's the only route, and conflating the two is what made the web build look
@@ -557,10 +559,39 @@ export default function MoneyModule({
     // The two are the same statement — "this went out, it was the rent" — and
     // leaving the tick to be done separately is how a bill ends up counted as
     // both paid and outstanding.
+    //
+    // AND, for a variable bill, it is ALSO the real amount.
+    // This used to write `paidFor` only. So on a bill whose amount changes
+    // every month — rent with the housemates' share folded in, electricity —
+    // paying it told the app nothing about what it cost, and the cycle went on
+    // reserving the estimate. The one place the true figure was known was the
+    // payment record, and it was thrown away. The user, on exactly this: 「我
+    // 要改预期金额…所以实际金额没变化，导致记录成以前的」.
+    //
+    // Keyed on the cycle the PAYMENT falls in, not today's — a bill payment
+    // filed three days late at the turn of the month belongs to the month it
+    // was paid in, and stamping it onto the new cycle would set this month's
+    // rent from last month's receipt.
     const allocationId = !formRefund && formAllocationId ? formAllocationId : null;
     if (allocationId) {
-      saveJSON('allocations', allocations.map(a => (String(a.id) === String(allocationId)
-        ? { ...a, paidFor: cycle.start } : a)));
+      const paidCycle = getCycle(new Date(yy, mm - 1, dd));
+      const target = allocations.find(a => String(a.id) === String(allocationId));
+      let nextAllocations = allocations.map(a => (String(a.id) === String(allocationId)
+        ? { ...a, paidFor: paidCycle.start } : a));
+      if (target?.variable) {
+        // The SUM of everything paid against this bill in that cycle, not just
+        // this record. A bill settled in two goes (half now, half when the
+        // money comes in) would otherwise end up recorded as whichever half
+        // was logged last — and the second, smaller one usually is.
+        const others = (allExpenses ?? expenses).filter(e =>
+          e.id !== editingId
+          && e.allocationId != null && String(e.allocationId) === String(allocationId)
+          && (e.date ?? paidCycle.start) >= paidCycle.start
+          && (e.date ?? paidCycle.start) < paidCycle.end);
+        const total = others.reduce((s, e) => s + Math.abs(num(e.amount)), 0) + magnitude;
+        nextAllocations = setCycleActual(nextAllocations, allocationId, paidCycle.start, total);
+      }
+      saveJSON('allocations', nextAllocations);
     }
 
     // onSaveExpense, not setExpenses. `setExpenses` can only write today by
@@ -1802,6 +1833,8 @@ export default function MoneyModule({
                     <p style={{ fontSize: '0.68rem', color: 'var(--color-money)', marginTop: '5px', lineHeight: 1.5 }}>
                       会算成这个周期的固定开销（不会再当成一般消费扣一次），
                       同时把这笔月费标记成「本期已付」。
+                      {allocations.find(a => String(a.id) === String(formAllocationId))?.variable
+                        && '这笔月费是「金额会变」的，所以这个数字会直接变成它这个月的实际金额 — 不用再去本月那边按 💰 输入一次。'}
                     </p>
                   )}
                 </div>

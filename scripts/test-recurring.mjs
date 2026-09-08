@@ -4,7 +4,8 @@
 import {
   normalizeAllocation, dueDatesBetween, nextDueDate, daysUntilDue,
   cycleCost, upcoming, totalBudgeted, totalCharged, chargedByAccount,
-  occurrencesPerYear,
+  occurrencesPerYear, isSkippedInCycle, isSkippedForCycleStart,
+  setCycleSkip, setCycleActual,
 } from '../src/utils/recurring.js';
 import { getCycle } from '../src/utils/cycle.js';
 
@@ -141,6 +142,56 @@ const byAccount = chargedByAccount(all, cycle);
 check('rent charges Maybank', r2(byAccount.get('mb')), 500);
 check('bills with no account are flagged, not silently dropped',
   byAccount.has('__unassigned'), true);
+
+// --- 「这个月算不算」 -------------------------------------------------------
+// A per-cycle off switch. The thing that had no home before: a bill you skip
+// one month is not a bill you cancelled (endDate) or created by mistake
+// (delete), and both of those lose the months it DID apply to.
+const nextCycle = getCycle(new Date(2026, 8, 20)); // September
+
+check('a bill nobody has touched is on', isSkippedInCycle(rent, cycle), false);
+check('normalize keeps the skip map rather than dropping it',
+  normalizeAllocation({ id: 1, skipped: { '2026-08-01': true } }).skipped, { '2026-08-01': true });
+
+const skipped = setCycleSkip([rent], 1, '2026-08-01', true);
+check('switching off is recorded against that cycle only',
+  [isSkippedInCycle(skipped[0], cycle), isSkippedInCycle(skipped[0], nextCycle)], [true, false]);
+check('a switched-off bill costs the cycle nothing',
+  [cycleCost(skipped[0], cycle).charged, cycleCost(skipped[0], cycle).budgeted], [0, 0]);
+check('...and still reports what turning it back on would cost',
+  cycleCost(skipped[0], cycle).per, 500);
+check('...and lands on no date, so it leaves the calendar too',
+  cycleCost(skipped[0], cycle).dates, []);
+check('...including the upcoming strip', upcoming(skipped, cycle).length, 0);
+check('...but is untouched next cycle', r2(cycleCost(skipped[0], nextCycle).charged), 500);
+
+// A spread annual bill reserves a slice every cycle whether or not it lands in
+// this one, so switching it off has to zero the RESERVE, not just the charge.
+const spreadOff = setCycleSkip([spread], spread.id, '2026-08-01', true);
+check('switching off a spread bill drops its reserve, not just its charge',
+  [cycleCost(spreadOff[0], cycle).budgeted, cycleCost(spreadOff[0], cycle).charged], [0, 0]);
+
+const backOn = setCycleSkip(skipped, 1, '2026-08-01', false);
+check('switching back on deletes the key rather than storing false',
+  backOn[0].skipped, {});
+check('...and the cost comes back', r2(cycleCost(backOn[0], cycle).charged), 500);
+check('skip lookups are by cycle start string',
+  isSkippedForCycleStart({ skipped: { '2026-08-01': true } }, '2026-08-01'), true);
+
+// --- confirming (and un-confirming) this cycle's real amount ---------------
+// The way back mattered as much as the way in: a confirmed actual beats the
+// estimate for that cycle forever, so without a clear, editing 预期金额 on a
+// bill already confirmed changed the month by nothing and said nothing.
+const confirmed = setCycleActual([utilities], 10, '2026-09-01', 288.15);
+check('confirming writes only that cycle',
+  [r2(cycleCost(confirmed[0], nextCycle).charged), r2(cycleCost(confirmed[0], cycle).charged)],
+  [288.15, 312.40]);
+check('zero is a real answer, not a clear',
+  r2(cycleCost(setCycleActual([utilities], 10, '2026-09-01', 0)[0], nextCycle).charged), 0);
+const cleared = setCycleActual(confirmed, 10, '2026-09-01', '');
+check('an empty value clears it and hands the cycle back to the estimate',
+  r2(cycleCost(cleared[0], nextCycle).charged), 250);
+check('...leaving other cycles alone', cleared[0].actuals, { '2026-08-01': 312.40 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
