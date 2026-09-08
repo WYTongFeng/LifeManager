@@ -2,6 +2,54 @@
 
 Tracks progress toward turning the LifeManager mockup into a complete personal app. Updated as we go.
 
+## M57 — A month that isn't like the others ✅ done — v1.11.0
+
+Nine complaints from a second round of daily use (2026-09-09). They looked unrelated and were one
+thing: **the money model could only describe a typical month**, and 房租 is a month that differs
+every time — RM2,000 that isn't his, bundled with Spotify and PBE, at an amount his dad keeps
+changing.
+
+**固定开销.** A per-cycle `skipped` map on an allocation. Switched off, a bill leaves the reserve,
+the calendar, 现在能花 and its reminder together, because all four read `cycleCost` or the dates it
+returns. Before this, "not this month" could only be said by deleting the bill (losing every month
+it did apply to) or setting an end date (which means cancelled).
+
+**The payment knew what the bill cost, and threw it away.** `allocationId` wrote `paidFor` only, so
+a variable bill went on reserving its estimate no matter what actually left the account. It now
+writes `actuals[paidCycle.start]` as the sum of that cycle's linked payments — the sum, because a
+bill settled in two goes was otherwise recorded as whichever half was logged last, and the second
+one is usually smaller.
+
+**The silent no-op.** A confirmed actual outranks the estimate for that cycle forever, so editing
+预期金额 on a bill already confirmed changed the month by nothing and said nothing about why. Both
+the edit form and the confirm box now say it, and the confirm box has the way back out.
+
+**欠款.** The same tick, plus `addToDebt` (the extra joins an existing plan — next instalment,
+spread over the unpaid ones, or appended — settled rows never rewritten), plus `repaymentOutlook`,
+a 6/12-month forward table with fixed bills alongside. Two calendar bugs went with it: 本期扣款日
+printed `nextInstalment`, the next unpaid one *ever*, so a December instalment showed under 本期;
+and being built from due dates it silently omitted every debt that has none.
+
+**支入.** The form asks 我的钱 / 我代收的 before it asks which source. `kind: 'passthrough'` has
+existed in cycle.js since M51, but a source created inline while logging an arrival was always
+`'income'` — so the money he was most careful about was the money the app was most confident he
+could spend.
+
+**项目「收起来」.** Archiving, which touches no figure. Closing was the only exit and it is an
+accounting statement — the unrecovered rest becomes his own spending — which for money he only
+fronted is backwards, and it leaves the project on screen regardless.
+
+**TNG, two faults.** Direction is checked before the verb (转账 / 汇款 / DuitNow are on the spend
+whitelist, so "…转账 RM50 给您" read as him paying out), and the GO+ sweep is no longer discarded —
+it was dropped on the assumption a richer notification always follows, which loses the entire inflow
+when it doesn't. The larger half was not classification: income the parser got RIGHT stopped at the
+capture log and reached nothing. It goes to the review queue now — queued, not auto-logged, because
+an inflow really can arrive twice and money invented into an account is worse than money missing
+from one.
+
+Still open, and blocked on his data rather than on code: the RM2,000 rent figure he described was
+never diagnosed, because reading it needs a 备份 → 导出文字档 he has not sent yet.
+
 ## M56 — One notification system, and 补充剂 ✅ done
 
 The brief asked for a full audit before any code, on the assumption that notification logic had
