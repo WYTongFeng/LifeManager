@@ -69,6 +69,40 @@ const cases = [
   // wording — kept now, flagged as a possible duplicate rather than discarded.
   ["资金支入成功\n您已成功支入RM10.88到您的GO+账户", 'income', 10.88, null, false, null],
 
+  // --- Captured verbatim from the user's TNG inbox on 2026-09-08 ----------
+  // Eleven consecutive notifications, screenshotted and handed over. Four
+  // separate faults, none of which any invented test case had found.
+
+  // 1. DuitNow is the payment RAIL, not the relationship — same mistake
+  // ALIPAY+ is already documented for. Paying a shop by DuitNow QR is the
+  // ordinary case in Malaysia, and treating the word as person-to-person
+  // forced `needsPurpose` on every one: the queue asked 「这笔是什么」 about a
+  // bakery every time, forever, because a transfer's category is never learned.
+  ["DuitNow付款\n您已经支付了 RM33.90 至 TONG YIK TP ENTERPRISE。",
+    'spend', 33.9, 'Tong Yik Tp Enterprise', true, 'other'],
+  ["DuitNow付款\n您已经支付了 RM5.50 至 JUAN ROTI SDN. BHD.。",
+    'spend', 5.5, 'Juan Roti', false, 'food'],
+
+  // 2. 「付款至: <NAME>」 — the colon was being logged as part of the shop.
+  // Not cosmetic: the learned-category map is keyed on the name.
+  ["付款至: Wok Kitchen\nWok Kitchen: RM12.90 已从您的TNG eWallet中扣除。",
+    'spend', 12.9, 'Wok Kitchen', false, 'food'],
+  ["付款至: MZIB TRADE SDN BHD\nMZIB TRADE SDN BHD: RM15.90 已从您的TNG eWallet中扣除。",
+    'spend', 15.9, 'Mzib Trade', true, 'other'],
+
+  // 3. A comma ends a clause in a body line but not in a name, and the payee
+  // was on the TITLE line — so the car park became 「Kpm-Lot L」. Car park
+  // operators never say "parking" either; the name is a lot number.
+  ["已支付给 KPM-LOT L,L1&M (CAR) KUALA LUMPUR\nKPM-LOT L,L1&M (CAR) KUALA LUMPUR: 您的TNG eWallet已支出RM4.00。",
+    'spend', 4, 'Kpm-Lot L,L1&M (Car) Kuala Lumpur', false, 'transport'],
+
+  // 4. Real inbound transfers, both wordings, on the same day as an outbound
+  // one to the SAME person — the pair that has to keep coming out opposite.
+  ["您有一项支入\n您已收到RM 18.00 来自 WONG JIN JIE 用于 甜品。", 'income', 18, 'WONG JIN JIE', false, null],
+  ["汇款成功\nRM 6.00已成功汇款到 NGO KAR HONG。", 'spend', 6, 'Ngo Kar Hong', true, 'transfer-person'],
+  ["您有一项支入\n您已收到RM 6.00 来自 NGO KAR HONG 用于 资金周转。", 'income', 6, 'NGO KAR HONG', false, null],
+  ["资金支入成功\n您已成功支入RM24.01到您的GO+账户", 'income', 24.01, null, false, null],
+
   // ...and the direction rule must NOT swallow ordinary payments. These all
   // mention 您 / your and are still money leaving.
   ["付款\n您已支付了RM4.00给EDISIJUTA PARKING SDN BHD。", 'spend', 4, 'Edisijuta Parking', false, 'transport'],

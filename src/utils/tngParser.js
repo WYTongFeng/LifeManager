@@ -189,14 +189,35 @@ const TRANSFER_RE = [
   /汇款(成功|到|至)?/,  // remittance / transfer
   /转账(到|至|给)?/,    // transfer
   /\btransfer(red)? (of )?RM/i,
-  /\bDuitNow\b/i,
   /\bsent RM\b/i,
   /\bmoney sent\b/i,
 ];
 
+// NB: DuitNow is deliberately NOT in the list above, and this is the same
+// mistake ALIPAY+ is already documented for further down — it is the payment
+// RAIL, not the relationship. Real notifications from this user's phone:
+//
+//   DuitNow付款 · 您已经支付了 RM33.90 至 TONG YIK TP ENTERPRISE
+//   DuitNow付款 · 您已经支付了 RM5.50 至 JUAN ROTI SDN. BHD.
+//
+// Both are shops, and in Malaysia paying a shop by DuitNow QR is the ordinary
+// case. Treating the word as a person-to-person transfer forced `needsPurpose`
+// on every one of them, so each went to the review queue asking 「这笔是什么」
+// — about a bakery, every single time, forever, because a transfer's category
+// is deliberately never learned.
+//
+// It is still a spend verb; it just says nothing about who was paid.
+const DUITNOW_RE = /\bDuit\s?Now\b/i;
+
+// A payee that is obviously a company is not "a friend I sent money to",
+// whatever the verb was. Cheap, and it is the one signal that can override a
+// genuine 汇款到 wording when the recipient turns out to be a business.
+const COMPANY_RE = /\b(sdn\.?\s*bhd|berhad|enterprise|trading|holdings?|resources|marketing|ventures?|plt|llp|inc|ltd)\b/i;
+
 // Money going OUT. One of these plus an amount is what authorises a log.
 const SPEND_RE = [
   ...TRANSFER_RE,
+  DUITNOW_RE,
   // English
   /\byou('ve| have) paid\b/i,
   /\bpayment (of|to|is|was|success)/i,
@@ -213,7 +234,10 @@ const SPEND_RE = [
   /\bfare charged\b/i,
   /\bhas been charged\b/i,
   // Chinese
-  /(您|你)?已支付(了)?/, // you have paid
+  // 已经支付, not just 已支付 — TNG uses both, and the DuitNow messages use the
+  // longer one. It survived only because the title carried 付款; a body-only
+  // capture of that wording would have fallen through to `unknown`.
+  /(您|你)?已(经)?支付(了)?/, // you have paid
   /付款(成功)?/,         // payment (successful)
   /支付成功/,            // payment successful
   /已支出/,              // "您的TNG 电子钱包已支出RM23.99" — the subscription wording
@@ -232,6 +256,25 @@ const SPEND_RE = [
 ];
 
 // --- Merchant extraction -----------------------------------------------------
+//
+// THE TITLE LINE IS THE BEST SOURCE, when it has one.
+// TNG puts the payee in the notification TITLE for several message shapes:
+//
+//   付款至: MZIB TRADE SDN BHD
+//   付款至: Wok Kitchen
+//   已支付给 KPM-LOT L,L1&M (CAR) KUALA LUMPUR
+//
+// The body-line rules below read those badly, in two different ways, and both
+// showed up in real captures:
+//
+//   · the colon leaked into the name — 「: Wok Kitchen」 was logged as the shop
+//   · the name stops at the first comma, because a comma ends a clause in the
+//     body — so 「KPM-LOT L,L1&M (CAR) KUALA LUMPUR」 became 「Kpm-Lot L」
+//
+// On a title line neither worry applies: the whole line IS the name, commas
+// included, and it ends at the line break. So this is tried first.
+const TITLE_MERCHANT_RE =
+  /^(?:已)?(?:支付给|支付至|付款至|付款给|汇款到|汇款至|转账到|转账至|转账给)\s*[:：]?\s*(.+)$/m;
 // English: the name follows "to" / "at" and runs until a connector word
 // ("on 11/08/2026", "via TNG eWallet") or punctuation.
 const EN_STOP = '(?:\\s+(?:on|at|via|using|with|for|is|was|has|successful|success)\\b|[.,;!\\n]|$)';
@@ -289,6 +332,10 @@ const CATEGORY_RULES = [
   ['transport', ['rapidkl', 'rapid kl', ' lrt', 'lrt ', 'mrt', 'ktm', 'monorail', 'komuter',
     'grab', 'myteksi', 'toll', 'tol ', 'plus highway', 'smarttag', 'smart tag', 'parking', 'parkir',
     'touch n go tol', 'transit', 'airasia', 'aeroline', 'maxim', 'indriver',
+    // Car park operators, from real captures. They never say "parking" — the
+    // name is a lot number ("KPM-LOT L,L1&M (CAR) KUALA LUMPUR"), so the
+    // existing 'parking' keyword never fired on any of them.
+    'kpm lot', 'car park', 'carpark', 'kompleks parking',
     '交通', '停车', '过路费']],
   ['groceries', ['grocer', 'tesco', 'lotus', 'giant', 'aeon', 'mydin', 'econsave', 'speedmart',
     'hero market', 'supermarket', 'sundry', 'family mart', 'familymart', '7-eleven', '7 eleven',
@@ -326,6 +373,10 @@ const CATEGORY_RULES = [
     'mcdonald', 'kfc', 'pizza', 'subway', 'burger', 'secret recipe', 'nasi', 'mee ', 'char kuey',
     'chicken rice', 'bakery', 'bake', 'dessert', 'ice cream', 'bistro', 'eatery', 'food court',
     'foodcourt', 'catering', 'tea house', 'sushi', 'ramen', 'steamboat',
+    // From real captures: JUAN ROTI SDN. BHD. and Wok Kitchen both fell
+    // through to 其他 and asked what they were, which for a bakery he buys
+    // from regularly is the app being useless in the most annoying way.
+    'roti', 'kitchen', 'wok', 'kopi', 'kuih', 'satay', 'dim sum', 'noodle',
     '餐厅', '茶室', '美食', '饮食']],
 ];
 
@@ -362,6 +413,12 @@ function matchesAny(patterns, text) {
 function tidyMerchant(raw) {
   const cleaned = raw
     .replace(/\s+/g, ' ')
+    // Leading separators the capture picked up rather than the name: 「付款至:
+    // Wok Kitchen」 was being logged to a shop called ": Wok Kitchen". Harmless
+    // to look at, not harmless underneath — the learned-category map is keyed
+    // on the name, so one stray character makes it a different merchant.
+    .replace(/^[\s:：\-–—>»·、,，.。]+/, '')
+    .replace(/[\s:：\-–—<«]+$/, '')
     .replace(/\s*(sdn\.? bhd\.?|bhd\.?)$/i, '')
     // Card-style descriptors carry a merchant reference number that is noise in
     // an expense list and, worse, differs per charge — "Google ChatGPT
@@ -375,7 +432,7 @@ function tidyMerchant(raw) {
 }
 
 function extractMerchant(text) {
-  for (const re of [...ZH_MERCHANT_RE, ...EN_MERCHANT_RE]) {
+  for (const re of [TITLE_MERCHANT_RE, ...ZH_MERCHANT_RE, ...EN_MERCHANT_RE]) {
     const m = text.match(re);
     if (!m) continue;
     const candidate = (m[1] || '').trim();
@@ -520,7 +577,11 @@ export function parseTngNotification(text, learned = {}) {
     }
 
     const merchant = extractMerchant(raw);
-    const isTransfer = matchesAny(TRANSFER_RE, raw);
+    // A company is not a friend. Without this, 汇款到 XXX SDN BHD reads as a
+    // person-to-person transfer and asks what it was for every single time —
+    // and a transfer's category is deliberately never learned, so it asks
+    // again next month.
+    const isTransfer = matchesAny(TRANSFER_RE, raw) && !COMPANY_RE.test(merchant ?? '');
 
     // The merchant name is the primary signal. Only if it says nothing do we
     // look at the message body, and then only for unambiguous purpose words —
@@ -613,5 +674,13 @@ export const SAMPLE_NOTIFICATIONS = [
   {
     label: 'A friend transferring money TO you (must not read as you paying them)',
     text: '转账通知\nLIM AH MENG 通过 DuitNow 转账 RM50.00 给您。',
+  },
+  {
+    label: 'DuitNow QR at a shop (the rail is not the relationship)',
+    text: 'DuitNow付款\n您已经支付了 RM5.50 至 JUAN ROTI SDN. BHD.。',
+  },
+  {
+    label: 'Payee on the title line, colon and commas and all',
+    text: '已支付给 KPM-LOT L,L1&M (CAR) KUALA LUMPUR\nKPM-LOT L,L1&M (CAR) KUALA LUMPUR: 您的TNG eWallet已支出RM4.00。',
   },
 ];
