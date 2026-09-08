@@ -50,6 +50,30 @@ const cases = [
   // adjacent in a real sentence, which the old /已扣(除|款)/ required.
   ["扣款通知\nRM6.00 已从您的 TNG eWallet 余额中扣除。", 'spend', 6, null, true, 'other'],
   ["自动扣款成功\n您的订阅 RM9.90 已自动扣款。", 'spend', 9.9, null, true, 'other'],
+
+  // --- MONEY COMING IN ----------------------------------------------------
+  // 「扣钱跟朋友转钱给我的判定不太正确」. 转账 / 汇款 / DuitNow are on the spend
+  // whitelist because they usually point outward — so a message that used the
+  // same verb about money arriving was logged as money leaving. The recipient
+  // is now checked BEFORE the verb.
+  ["转账通知\nLIM AH MENG 通过 DuitNow 转账 RM50.00 给您。", 'income', 50, null, false, null],
+  ["您有一项支入\n您已收到RM 10.88 来自 YAP LEE CHIN 用于 ❤心早餐。", 'income', 10.88, 'YAP LEE CHIN', false, null],
+  // The header alone, without the body that names the sender. It used to match
+  // only through 收到RM in the second line — which is a line this app does not
+  // always receive.
+  ["您有一项支入\nRM 25.00", 'income', 25, null, false, null],
+  ["收款成功\nRM 120.00 已转入您的钱包。", 'income', 120, null, false, null],
+  ["You have received a transfer of RM75.00 to your TNG eWallet.", 'income', 75, null, false, null],
+
+  // The one that used to be thrown away. Real money in, in TNG's least useful
+  // wording — kept now, flagged as a possible duplicate rather than discarded.
+  ["资金支入成功\n您已成功支入RM10.88到您的GO+账户", 'income', 10.88, null, false, null],
+
+  // ...and the direction rule must NOT swallow ordinary payments. These all
+  // mention 您 / your and are still money leaving.
+  ["付款\n您已支付了RM4.00给EDISIJUTA PARKING SDN BHD。", 'spend', 4, 'Edisijuta Parking', false, 'transport'],
+  ["扣款通知\nRM12.00 已从您的 TNG eWallet 余额中扣除。", 'spend', 12, null, true, 'other'],
+  ["汇款成功\nRM 20.00已成功汇款到 TAN MEI LING。", 'spend', 20, 'Tan Mei Ling', true, 'transfer-person'],
 ];
 let bad=0;
 console.log('     kind     amt     purpose  category            merchant');

@@ -84,13 +84,50 @@ const NOISE_RE = [
   /免费/,              // free
   /积分/,              // loyalty points
   /从\s*(?:RM|MYR)\s*[\d,.]+\s*起/, // "from RM300" — an advertised price, not a charge
-  // "资金支入成功 / 您已成功支入RMx到您的GO+账户" — TNG's own internal sweep into
-  // its GO+ investment sub-account. It fires alongside a separate, more useful
-  // notification for the same money ("您有一项支入 / 您已收到RMx 来自 <人名> 用于
-  // <用途>") that actually carries who sent it and what for. Keeping both would
-  // either double-count the same inflow or, since this one names no sender,
-  // fall through to `unknown` and sit in the manual review queue for no reason.
-  /支入.{0,20}GO\+\s*账户/,
+];
+
+// "资金支入成功 / 您已成功支入RMx到您的GO+账户" — TNG's own sweep into its GO+
+// sub-account.
+//
+// THIS USED TO BE A NOISE RULE, AND THAT LOST MONEY.
+// The reasoning was that it always fires alongside a richer notification for
+// the same money ("您有一项支入 / 您已收到RMx 来自 <人名> 用于 <用途>"), so
+// dropping it avoided a double count. That holds only while the pair really
+// does always arrive. When it doesn't — a bank reload swept straight into GO+,
+// a notification the phone never handed over — the ONLY message about that
+// money said nothing, and the inflow vanished with no trace anywhere in the
+// app. The user, on exactly this: 「目前钱进入tng的判定不好」.
+//
+// Silently discarding real money is the worse failure of the two, and the
+// duplicate has a cheap answer that discarding does not: income now waits in
+// the review queue instead of being logged automatically, so a genuine pair
+// shows up as two rows he dismisses one of. Naming the risk beats hiding it.
+const GOPLUS_SWEEP_RE = /支入.{0,20}GO\+\s*账户/;
+
+// Money moving INTO the wallet, said as a direction rather than as a verb.
+//
+// The verb alone is ambiguous and this is where the misreads came from: 转账,
+// 汇款 and DuitNow all appear in SPEND_RE, because they usually mean money
+// leaving. In "XXX 通过 DuitNow 转账 RM50 给您" they mean the exact opposite,
+// and with no rule for the direction the message matched the spend whitelist
+// and a friend paying the user back was logged as the user paying a friend.
+// The user: 「扣钱跟朋友转钱给我的判定不太正确」.
+//
+// So these are checked BEFORE the spend list: an explicit "to you" outranks a
+// verb that only usually points outward.
+// Every one of these names the RECIPIENT — deliberately narrow, because a rule
+// this early in the chain overrides the spend whitelist, and a loose one would
+// start reading payments as income, which is the failure that quietly inflates
+// what you think you have. "给" alone is not enough; "给您" is.
+const INBOUND_RE = [
+  /(给|到|入)\s*(您|你)的?\s*(钱包|余额|账户|帐户)/,        // 转入您的钱包
+  /(转账|汇款|转|汇|付|打款|支付)\s*(?:RM|MYR)?\s*[\d,.]*\s*给\s*(您|你)/, // …转账 RM50 给您
+  /(您|你)的?\s*(钱包|余额|账户|帐户)[^。\n]{0,8}(增加|收到|入账|多了)/,
+  // English
+  /\bto\s+your\s+[^.\n]{0,20}\b(wallet|account|balance)\b/i,
+  /\btransfer(red)?\s+to\s+you\b/i,
+  /\bsent\s+you\b/i,
+  /\bpaid\s+you\b/i,
 ];
 
 // Money coming IN. Checked before spend because reload messages also contain
@@ -107,12 +144,23 @@ const INCOME_RE = [
   /\bcashback of\b/i,
   /\bcredited to your\b/i,
   /\bcash ?in\b/i,
+  /\bincoming (transfer|payment|fund)/i,
+  /\bhas been received\b/i,
+  /\bmoney (in|received)\b/i,
   // Chinese
   /充值(成功)?/,       // reload (successful)
-  /已存入|已入账/,     // deposited / credited
+  /已存入|已入账|入账/, // deposited / credited
   /退款/,              // refund
   /收到了?\s*(?:RM|MYR)/, // received RMx
   /返现/,              // cashback
+  // TNG's own wording for an inbound transfer. 「您有一项支入」 is the header
+  // of the message that carries the sender and the purpose, and it was only
+  // ever matched by accident, through the 收到RM line in its body — a body
+  // this app does not always get.
+  /(有一项|有一笔|一项|一笔)\s*支入/,
+  /收款(成功|通知)?/,  // 收款成功
+  /转入(成功)?/,       // 转入
+  /到账(成功|通知)?/,  // 到账
 ];
 
 // "您有一项支入 / 您已收到RM 10.88 来自 YAP LEE CHIN 用于 ❤心早餐。" — the one
@@ -396,7 +444,14 @@ export function categorise(merchant, learned = {}) {
  */
 export function parseTngNotification(text, learned = {}) {
   const raw = (text || '').trim();
-  const base = { amount: null, merchant: null, category: null, isTransfer: false, needsPurpose: false };
+  const base = {
+    amount: null, merchant: null, category: null, isTransfer: false,
+    needsPurpose: false,
+    // Only ever true on the GO+ sweep: real money, possibly already reported by
+    // a second notification about the same ringgit. The UI says so rather than
+    // the parser choosing for you — see GOPLUS_SWEEP_RE.
+    possibleDuplicate: false,
+  };
 
   if (!raw) {
     return { ...base, kind: 'unknown', reason: 'Nothing to read.' };
@@ -408,6 +463,35 @@ export function parseTngNotification(text, learned = {}) {
     return {
       ...base, kind: 'noise',
       reason: 'Reads as marketing or loyalty points, not a transaction.',
+    };
+  }
+
+  // The GO+ sweep. Real money in, said in TNG's most useless wording — no
+  // sender, no purpose, and possibly a second notification about the same
+  // ringgit. It used to be discarded outright, which lost the inflow whenever
+  // the pair failed to arrive. Flagged instead: income, marked as a possible
+  // duplicate, and parked for review rather than logged.
+  if (GOPLUS_SWEEP_RE.test(raw)) {
+    return {
+      ...base, kind: 'income', amount, possibleDuplicate: true,
+      reason: amount
+        ? `RM ${amount.toFixed(2)} 进了 TNG 的 GO+ 户口。同一笔钱有时会另外再发一则通知（写着谁转给你、用途），如果你已经记过那一笔，把这个删掉就好。`
+        : 'GO+ 户口有一笔进账，但读不到金额。',
+    };
+  }
+
+  // DIRECTION BEFORE VERB. 转账 / 汇款 / DuitNow are on the spend whitelist
+  // because they usually point outward — but "…转账 RM50 给您" points the other
+  // way, and with no rule for that the message hit the whitelist and a friend
+  // paying the user back was logged as the user paying a friend.
+  if (matchesAny(INBOUND_RE, raw) && !matchesAny(NOISE_RE, raw)) {
+    const sender = extractIncomeSender(raw);
+    const purpose = extractIncomePurpose(raw);
+    return {
+      ...base, kind: 'income', amount, merchant: sender,
+      reason: amount
+        ? `有人转 RM ${amount.toFixed(2)} 给你${sender ? `（${sender}）` : ''}${purpose ? ` · ${purpose}` : ''} — 这是进账，不是你花的钱。`
+        : '这则通知说钱是进来的，不是出去的，但读不到金额。',
     };
   }
 
@@ -519,11 +603,15 @@ export const SAMPLE_NOTIFICATIONS = [
     text: "Touch 'n Go eWallet\nReload successful! RM100.00 has been added to your TNG eWallet balance.",
   },
   {
-    label: 'GO+ internal sweep (must be ignored — duplicate of the transfer below)',
+    label: 'GO+ sweep (money IN — flagged as a possible duplicate of the one below)',
     text: '资金支入成功\n您已成功支入RM10.88到您的GO+账户',
   },
   {
     label: 'Received a transfer with sender + purpose (money IN — not spending)',
     text: '您有一项支入\n您已收到RM 10.88 来自 YAP LEE CHIN 用于 ❤心早餐。',
+  },
+  {
+    label: 'A friend transferring money TO you (must not read as you paying them)',
+    text: '转账通知\nLIM AH MENG 通过 DuitNow 转账 RM50.00 给您。',
   },
 ];

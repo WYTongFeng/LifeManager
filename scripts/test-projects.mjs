@@ -1,5 +1,6 @@
 import {
-  getProjects, getOpenProjects, getClosedProjects, findProjectFor, getDebtorStatus,
+  getProjects, getOpenProjects, getClosedProjects, getArchivedProjects,
+  findProjectFor, getDebtorStatus,
   ownSpendById, ownSpend, closedProjectRepaymentIds,
 } from '../src/utils/projects.js';
 
@@ -177,6 +178,34 @@ const overRepaid = [
   { id: 2, merchant: 'Ah Meng', amount: -70, repaysExpenseId: 1 },
 ];
 check('an overpaid closed project floors myShare at 0', getProjects(overRepaid)[0].myShare, 0);
+
+// --- 收起来 (archive) --------------------------------------------------------
+// A different exit from 结束, and the one the user was reaching for on the rent:
+// take it off the screen, touch NO figure. Closing is an accounting statement
+// and charges the unrecovered part to him, which for money he only fronted is
+// backwards.
+const archived = expenses.map(e => (e.id === 1 ? { ...e, archivedAt: 1757000000000 } : e));
+check('an archived project is flagged', getProjects(archived)[0].isArchived, true);
+check('...and drops out of the open list', getOpenProjects(archived).length, 0);
+check('...and is listed under its own heading instead', getArchivedProjects(archived).map(p => p.id), [1]);
+check('archiving changes no money at all',
+  [getProjects(archived)[0].amount, getProjects(archived)[0].repaidAmount,
+    getProjects(archived)[0].outstanding, getProjects(archived)[0].myShare],
+  [100, 55, 45, 45]);
+check('...and is not the same thing as closing', getProjects(archived)[0].isClosed, false);
+check('a project that is neither closed nor archived is in neither list',
+  [getClosedProjects(expenses).length, getArchivedProjects(expenses).length], [0, 0]);
+
+// A project can be both. Archiving a closed one takes it out of 已结束 rather
+// than leaving it in two lists at once.
+const closedAndArchived = [
+  { id: 1, merchant: 'Trip', amount: 50, isProject: true, closedAt: 1755000000000, archivedAt: 1757000000000 },
+];
+check('a closed project that is archived leaves the closed list',
+  getClosedProjects(closedAndArchived).length, 0);
+check('...and appears in the archived one, still marked closed',
+  [getArchivedProjects(closedAndArchived).length, getArchivedProjects(closedAndArchived)[0].isClosed],
+  [1, true]);
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : fail + ' FAILED'}  (${pass} passed)`);
 if (fail > 0) process.exit(1);

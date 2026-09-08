@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Smartphone, Plus, Trash2, Pencil, X, Check, AlertTriangle,
-  Info, ArrowDownLeft, Wallet, HelpCircle, ArrowRightLeft, Copy,
+  Info, ArrowDownLeft, Wallet, HelpCircle, ArrowRightLeft, Copy, Archive,
 } from '../utils/icons';
 import confetti from 'canvas-confetti';
 import { usePersistentState, useLiveJSON, saveJSON } from '../utils/storage';
@@ -28,7 +28,8 @@ import {
   FALLBACK_EXPENSE_CATEGORY, FALLBACK_INCOME_CATEGORY, resolveCategoryId, categoryKindFor,
 } from '../utils/moneyCategories';
 import {
-  getProjects, getOpenProjects, getClosedProjects, getDebtorStatus, ownSpendById, ownSpend,
+  getProjects, getOpenProjects, getClosedProjects, getArchivedProjects,
+  getDebtorStatus, ownSpendById, ownSpend,
 } from '../utils/projects';
 import { isNativeAvailable } from '../utils/tngNative';
 import { getCycle } from '../utils/cycle';
@@ -190,6 +191,17 @@ export default function MoneyModule({
   // Naming a brand-new source inline, so filing an arrival never means leaving
   // the form, going to 本月, creating a source, and coming back.
   const [formNewSource, setFormNewSource] = useState('');
+  // 「这笔钱是我的吗」 — asked BEFORE which source, because it is the question
+  // that decides whether the money is spendable at all, and the source list is
+  // meaningless until it is answered.
+  //
+  // The rent is the case that forced it. RM2,000 lands in his account every
+  // month and none of it is his: he collects it and passes it on. cycle.js has
+  // had `kind: 'passthrough'` for exactly this since the overhaul, but the only
+  // way to create one was to go to 本月 first — an inline source created here
+  // was always `kind: 'income'`, i.e. always spendable. So the money he was
+  // most careful about was the money the app was most confident he could spend.
+  const [formInKind, setFormInKind] = useState('mine');
   // WHICH FIXED BILL this payment is. Without it a logged rent payment was
   // charged twice: once as the allocation's reservation, once as spending.
   const [formAllocationId, setFormAllocationId] = useState('');
@@ -210,6 +222,7 @@ export default function MoneyModule({
   const projects = useMemo(() => getProjects(allExpenses ?? expenses), [allExpenses, expenses]);
   const openProjects = useMemo(() => getOpenProjects(allExpenses ?? expenses), [allExpenses, expenses]);
   const closedProjects = useMemo(() => getClosedProjects(allExpenses ?? expenses), [allExpenses, expenses]);
+  const archivedProjects = useMemo(() => getArchivedProjects(allExpenses ?? expenses), [allExpenses, expenses]);
   const projectsById = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
   // What each expense actually cost THIS user — a closed project counts only
   // the share nobody paid back. Built once here rather than per row.
@@ -259,6 +272,26 @@ export default function MoneyModule({
     // eslint-disable-next-line no-unused-vars
     const { closedAt: _closedAt, ...reopened } = stored;
     onSaveExpense(reopened);
+  };
+
+  /**
+   * 收起来 — take a project off this screen without touching a single figure.
+   *
+   * The exit that was missing. 「结束」 was the only one, and it is an
+   * accounting statement (the rest was mine) that also leaves the project
+   * listed. Same onSaveExpense route as closing, for the same reason.
+   */
+  const archiveProject = (project) => {
+    const stored = storedExpense(project.id);
+    if (stored) onSaveExpense({ ...stored, archivedAt: Date.now() });
+  };
+
+  const unarchiveProject = (project) => {
+    const stored = storedExpense(project.id);
+    if (!stored) return;
+    // eslint-disable-next-line no-unused-vars
+    const { archivedAt: _archivedAt, ...restored } = stored;
+    onSaveExpense(restored);
   };
 
   // Notification reader
@@ -440,6 +473,7 @@ export default function MoneyModule({
     setFormTime(nowTimeStr());
     setFormIncomeSourceId('');
     setFormNewSource('');
+    setFormInKind('mine');
     setFormAllocationId('');
   };
 
@@ -487,6 +521,12 @@ export default function MoneyModule({
     setFormTime(toHHMM(expense.time) ?? '');
     setFormIncomeSourceId(expense.incomeSourceId != null ? String(expense.incomeSourceId) : '');
     setFormNewSource('');
+    // Read back off the source it was filed under, not stored on the record —
+    // the source owns whether that money is spendable, and a copy on every
+    // arrival would go stale the moment the source changed.
+    setFormInKind(
+      incomeSources.find(s => String(s.id) === String(expense.incomeSourceId))?.kind === 'passthrough'
+        ? 'passthrough' : 'mine');
     setFormAllocationId(expense.allocationId != null ? String(expense.allocationId) : '');
     setShowEntryModal(true);
   };
@@ -548,7 +588,13 @@ export default function MoneyModule({
     // nothing, and once this arrival lands the real figure is what counts.
     let incomeSourceId = formMoneyIn && formIncomeSourceId ? formIncomeSourceId : null;
     if (formMoneyIn && formIncomeSourceId === '__new' && formNewSource.trim()) {
-      const created = { id: newId(), label: formNewSource.trim(), amount: 0, kind: 'income' };
+      const created = {
+        id: newId(), label: formNewSource.trim(), amount: 0,
+        // Was hardcoded 'income'. A source created while logging 房租 money
+        // arriving is the one most likely to be 代收代付, and it was the one
+        // case this path could not express.
+        kind: formInKind === 'passthrough' ? 'passthrough' : 'income',
+      };
       saveJSON('incomeSources', [...incomeSources, created]);
       incomeSourceId = created.id;
     } else if (incomeSourceId === '__new') {
@@ -1218,13 +1264,26 @@ export default function MoneyModule({
                     eating. Without this the project sits here forever showing
                     「还差 RM 25」 for a share nobody owes. Closing says the rest
                     was mine, and that share becomes this user's own spending. */}
-                <button
-                  onClick={() => setConfirmCloseProject(p)}
-                  className="btn-secondary"
-                  style={{ marginTop: '10px', width: '100%', fontSize: '0.72rem', padding: '0.45rem' }}
-                >
-                  <Check size={13} /> 结束这个项目（剩下的 RM {p.outstanding.toFixed(2)} 算我自己花的）
-                </button>
+                <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
+                  <button
+                    onClick={() => setConfirmCloseProject(p)}
+                    className="btn-secondary"
+                    style={{ flex: 1, fontSize: '0.72rem', padding: '0.45rem' }}
+                  >
+                    <Check size={13} /> 结束（剩下 RM {p.outstanding.toFixed(2)} 算我花的）
+                  </button>
+                  {/* The other exit, and the one that was missing. Closing is
+                      an accounting statement; this is only about the screen —
+                      no figure moves. See archiveProject. */}
+                  <button
+                    onClick={() => archiveProject(p)}
+                    className="btn-secondary"
+                    title="从这个列表收起来，金额完全不动"
+                    style={{ flexShrink: 0, fontSize: '0.72rem', padding: '0.45rem 0.7rem' }}
+                  >
+                    <Archive size={13} /> 收起来
+                  </button>
+                </div>
               </div>
               );
             })}
@@ -1255,16 +1314,65 @@ export default function MoneyModule({
                   垫了 RM {p.amount.toFixed(2)} · 收回 RM {p.repaidAmount.toFixed(2)} ·{' '}
                   <strong style={{ color: 'var(--color-accent-red)' }}>我自己出 RM {p.myShare.toFixed(2)}</strong>
                 </div>
+                <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                  <button
+                    onClick={() => reopenProject(p)}
+                    className="btn-secondary"
+                    style={{ fontSize: '0.66rem', padding: '3px 9px' }}
+                  >
+                    重新打开
+                  </button>
+                  <button
+                    onClick={() => archiveProject(p)}
+                    className="btn-secondary"
+                    style={{ fontSize: '0.66rem', padding: '3px 9px' }}
+                  >
+                    <Archive size={11} /> 收起来
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {/* Put away. One fold deeper than 已结束, because the whole point is not
+          to see them — but listable and restorable, never deleted: deleting
+          would take the expense out of the ledger, which is real money removed
+          for a screen-tidying decision. */}
+      {archivedProjects.length > 0 && (
+        <details>
+          <summary style={{
+            fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-muted)',
+            cursor: 'pointer', padding: '0.35rem 0',
+          }}>
+            收起来的项目（{archivedProjects.length}）
+          </summary>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px' }}>
+            {archivedProjects.map(p => (
+              <div key={p.id} className="glass-card" style={{ padding: '0.6rem 0.8rem', opacity: 0.6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: '700', minWidth: 0 }}>{p.merchant}</span>
+                  <span style={{ fontSize: '0.64rem', color: 'var(--text-muted)', flexShrink: 0 }}>{p.date}</span>
+                </div>
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '3px' }}>
+                  RM {p.amount.toFixed(2)} · 收回 RM {p.repaidAmount.toFixed(2)}
+                  {p.isClosed ? ' · 已结束' : ' · 没结束，只是收起来'}
+                </div>
                 <button
-                  onClick={() => reopenProject(p)}
+                  onClick={() => unarchiveProject(p)}
                   className="btn-secondary"
-                  style={{ marginTop: '8px', fontSize: '0.66rem', padding: '3px 9px' }}
+                  style={{ marginTop: '7px', fontSize: '0.64rem', padding: '3px 9px' }}
                 >
-                  重新打开
+                  放回去
                 </button>
               </div>
             ))}
           </div>
+          <p style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginTop: '8px', lineHeight: 1.5 }}>
+            收起来<strong>不动任何金额</strong> — 那笔开销、户口余额、还款记录全都还在，
+            只是不出现在上面的列表里。
+          </p>
         </details>
       )}
 
@@ -1757,32 +1865,80 @@ export default function MoneyModule({
                   same ringgit twice). See cycle.js. */}
               {formMoneyIn && (
                 <div>
-                  <label style={labelStyle}>这笔算哪一种收入?</label>
+                  {/* THE FIRST QUESTION, and it used to be unaskable here.
+                      Answering it decides whether this money is spendable —
+                      everything below is just which line it belongs to. */}
+                  <label style={labelStyle}>这笔钱是我的吗?</label>
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '4px', marginBottom: '10px' }}>
+                    {[
+                      { value: 'mine', label: '我的钱', hint: '可以花', tint: 'var(--color-money)', soft: 'var(--color-money-soft)' },
+                      { value: 'passthrough', label: '我代收的', hint: '要转出去，不可花', tint: 'var(--color-diet)', soft: 'var(--color-diet-soft)' },
+                    ].map(opt => {
+                      const on = formInKind === opt.value;
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => {
+                            setFormInKind(opt.value);
+                            // The source list below is filtered by this, so a
+                            // selection that no longer belongs to it has to go
+                            // — otherwise the select shows one thing and the
+                            // record saves another.
+                            const src = incomeSources.find(s => String(s.id) === String(formIncomeSourceId));
+                            const srcKind = src?.kind === 'passthrough' ? 'passthrough' : 'mine';
+                            if (src && srcKind !== opt.value) setFormIncomeSourceId('');
+                          }}
+                          style={{
+                            flex: 1, padding: '8px 6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                            background: on ? opt.soft : 'var(--bg-input)',
+                            border: `1px solid ${on ? opt.tint : 'var(--border-glass)'}`,
+                            color: on ? opt.tint : 'var(--text-secondary)',
+                          }}
+                        >
+                          <div style={{ fontSize: '0.76rem', fontWeight: '700' }}>{opt.label}</div>
+                          <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '1px' }}>{opt.hint}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {formInKind === 'passthrough' && (
+                    <p style={{ fontSize: '0.68rem', color: 'var(--color-diet)', marginBottom: '8px', lineHeight: 1.5 }}>
+                      像房租那 RM2,000 — 进你的户口，但要转出去。余额会加，
+                      <strong>每日额度不会动</strong>，所以下个月还垫得出来。
+                    </p>
+                  )}
+
+                  <label style={labelStyle}>
+                    {formInKind === 'passthrough' ? '算哪一笔代收?' : '这笔算哪一种收入?'}
+                  </label>
                   <select
                     value={formIncomeSourceId}
                     onChange={(e) => setFormIncomeSourceId(e.target.value)}
                     style={inputStyle}
                   >
                     <option value="">还没归类（不会算进本月收入）</option>
-                    {incomeSources.map(src => (
-                      <option key={src.id} value={String(src.id)}>
-                        {src.label}{src.kind === 'passthrough' ? '（代收代付）' : ''}
-                      </option>
-                    ))}
-                    <option value="__new">+ 新的收入来源…</option>
+                    {incomeSources
+                      .filter(src => (src.kind === 'passthrough') === (formInKind === 'passthrough'))
+                      .map(src => (
+                        <option key={src.id} value={String(src.id)}>{src.label}</option>
+                      ))}
+                    <option value="__new">+ 新的{formInKind === 'passthrough' ? '代收' : '收入'}来源…</option>
                   </select>
 
                   {formIncomeSourceId === '__new' && (
                     <>
                       <input
                         type="text"
-                        placeholder="例：工作收入 / 房租收入 / 朋友还钱"
+                        placeholder={formInKind === 'passthrough' ? '例：房租代收 / 帮朋友垫的' : '例：工作收入 / 爸爸生活费'}
                         value={formNewSource}
                         onChange={(e) => setFormNewSource(e.target.value)}
                         style={inputStyle}
                       />
                       <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '6px' }}>
-                        {['工作收入', '房租收入', '朋友还钱', '其他收入'].map(name => (
+                        {(formInKind === 'passthrough'
+                          ? ['房租代收', '水电代收', '朋友的份', '其他代收']
+                          : ['工作收入', '爸爸生活费', '朋友还钱', '其他收入']).map(name => (
                           <button
                             key={name}
                             type="button"

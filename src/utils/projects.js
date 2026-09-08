@@ -45,6 +45,20 @@ export function getProjects(expenses) {
         repaidAmount,
         outstanding,
         isClosed,
+        // ARCHIVED — 「收起来」, and it is not the same thing as closed.
+        //
+        // Closing is an accounting statement: nothing more is coming, the rest
+        // was mine. Archiving is a statement about the SCREEN: stop showing me
+        // this. The user hit the gap trying to hide the rent — 「我想隐藏项目，
+        // 但是他最后隐藏了还是出现在我的项目里」 — because closing was the only
+        // exit and it leaves the project on the page in 已结束的项目, having
+        // also charged the unrecovered part to him as his own spending, which
+        // for money he was only fronting is exactly backwards.
+        //
+        // So this deliberately touches NO figure. The expense stays in the
+        // ledger, the balance stays moved, repayments stay linked. It only
+        // decides what the projects screen lists.
+        isArchived: project.archivedAt != null,
         // What the user themselves ended up paying: everything nobody sent
         // back. Floored at 0 so an overpayment reads as "I paid nothing"
         // rather than as negative spending.
@@ -55,16 +69,34 @@ export function getProjects(expenses) {
     });
 }
 
-/** Projects still owed money on — what the repayment dropdown offers. */
+/**
+ * Projects still owed money on — what the repayment dropdown offers.
+ * Archived ones are out: the whole point of putting one away is that it stops
+ * appearing in the lists you pick from.
+ */
 export function getOpenProjects(expenses) {
-  return getProjects(expenses).filter(p => !p.isSettled);
+  return getProjects(expenses).filter(p => !p.isSettled && !p.isArchived);
 }
 
 /** Projects closed by hand, newest first — the 已结束 list, and undo. */
 export function getClosedProjects(expenses) {
   return getProjects(expenses)
-    .filter(p => p.isClosed)
+    .filter(p => p.isClosed && !p.isArchived)
     .sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0));
+}
+
+/**
+ * Projects put away, newest first.
+ *
+ * Kept listable rather than deleted, and restorable, for the same reason
+ * closing is reversible: 「收起来」 is a judgement about what is worth looking
+ * at, and those get made wrongly. Deleting would have taken the expense with
+ * it, which is money out of the ledger for a screen-tidying decision.
+ */
+export function getArchivedProjects(expenses) {
+  return getProjects(expenses)
+    .filter(p => p.isArchived)
+    .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
 }
 
 /**

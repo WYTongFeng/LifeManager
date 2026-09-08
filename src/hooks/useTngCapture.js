@@ -5,7 +5,7 @@ import {
   setWatchedPackages as pushWatchedPackages,
 } from '../utils/tngNative';
 import { parseTngNotification } from '../utils/tngParser';
-import { FALLBACK_EXPENSE_CATEGORY } from '../utils/moneyCategories';
+import { FALLBACK_EXPENSE_CATEGORY, FALLBACK_INCOME_CATEGORY } from '../utils/moneyCategories';
 import {
   accountForPackage, defaultAccount, ensureAccounts, watchedPackages,
 } from '../utils/accounts';
@@ -118,7 +118,27 @@ function processCapture(payload, ctx) {
     return;
   }
 
-  // Everything else — income, marketing, points — is recorded above and stops.
+  // MONEY IN. This used to stop at the capture log with marketing and points,
+  // which meant the app knew RM50 had arrived and told nobody: the TNG balance
+  // never rose, the arrival never reached 本月, and the only trace was behind a
+  // button. 「目前钱进入tng的判定不好」 was partly the rules and partly this —
+  // half the classifications it got RIGHT went nowhere.
+  //
+  // Queued rather than logged automatically, unlike a payment. An inflow can
+  // legitimately arrive twice (the GO+ sweep and the transfer notification for
+  // the same ringgit), and money invented into an account is worse than money
+  // missing from one — a balance that is too high is the reassuring direction.
+  // One tap to confirm, one to dismiss the duplicate.
+  if (parsed.kind === 'income' && parsed.amount) {
+    queueItem({
+      isMoneyIn: true,
+      category: FALLBACK_INCOME_CATEGORY,
+      possibleDuplicate: Boolean(parsed.possibleDuplicate),
+    });
+    return;
+  }
+
+  // Everything else — marketing, points — is recorded above and stops.
   if (parsed.kind !== 'spend' || !parsed.amount) return;
 
   setExpenses(prev => [{

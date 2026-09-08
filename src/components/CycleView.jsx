@@ -816,12 +816,16 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                   {pass ? '代收代付 · 不可花' : '可以花'}
                   {row.landed
                     ? <> · 已收到 {money(row.arrived)}
-                        {/* Only after something lands. Before that, "short by
-                            the whole amount" just means it has not come yet. */}
-                        {row.shortfall > 0.005 && (
+                        {/* Only after something lands, and only against a real
+                            expectation. A source created on the fly while
+                            logging an arrival expects 0, and 「多了 RM2,000」
+                            against a figure nobody set is noise dressed as a
+                            finding. Before it lands, "short by the whole
+                            amount" just means it has not come yet. */}
+                        {row.expected > 0 && row.shortfall > 0.005 && (
                           <strong style={{ color: 'var(--color-accent-red)' }}> · 少了 {money(row.shortfall)}</strong>
                         )}
-                        {row.shortfall < -0.005 && (
+                        {row.expected > 0 && row.shortfall < -0.005 && (
                           <strong style={{ color: 'var(--color-money)' }}> · 多了 {money(-row.shortfall)}</strong>
                         )}
                       </>

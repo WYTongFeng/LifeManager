@@ -157,17 +157,32 @@ export default function TngAutoCapture({
     setQueue(queue.map(q => (q.id === id ? { ...q, ...patch } : q)));
 
   const confirmItem = (item) => {
-    if (!item.note.trim()) return;
+    // An arrival needs no note: the sender's name IS the description, and
+    // demanding "what was this for" about money someone sent you is a question
+    // with no answer half the time.
+    if (!item.isMoneyIn && !item.note.trim()) return;
     const account = accountById(accounts, item.accountId);
     setExpenses([{
       id: item.id,
-      merchant: item.merchant.trim() || 'Unknown merchant',
-      amount: num(item.amount),
+      merchant: item.merchant.trim() || (item.isMoneyIn ? '进账' : 'Unknown merchant'),
+      // Stored NEGATIVE, like every other incoming record — that is what
+      // credits the account balance. See makeTransfer / the refund path.
+      amount: item.isMoneyIn ? -Math.abs(num(item.amount)) : num(item.amount),
       category: item.category,
       note: item.note.trim(),
       accountId: item.accountId ?? null,
       paymentMethod: account?.name ?? '未指定户口',
       source: '自动侦测',
+      // The flag, not just the sign: a refund and an arrival are both stored
+      // negative and behave completely differently in the cycle budget — a
+      // refund nets against spending, an arrival must not. See cycle.js.
+      isMoneyIn: Boolean(item.isMoneyIn),
+      // Deliberately unfiled. 本月 will show it under 未归类进账 and ask him to
+      // pick a source, which is the one question the notification cannot
+      // answer — and guessing it would be the double-count cycle.js spends
+      // most of its length avoiding.
+      incomeSourceId: null,
+      type: item.isMoneyIn ? 'income' : 'expense',
       time: item.time,
       // Same reason as the automatic path: an item can sit in this queue for
       // days, and it belongs to the day it was paid, not the day you got round
@@ -176,8 +191,10 @@ export default function TngAutoCapture({
     }, ...expenses]);
 
     // A transfer's category says nothing reusable — the same person can be
-    // dinner one week and rent the next.
-    if (!item.isTransfer) {
+    // dinner one week and rent the next. Neither does a sender's name: the
+    // merchant map is for shops you pay, and teaching it "YAP LEE CHIN = 进账"
+    // would file a future payment TO them as income.
+    if (!item.isTransfer && !item.isMoneyIn) {
       const key = merchantKey(item.merchant);
       if (key) setLearned(prev => ({ ...prev, [key]: item.category }));
     }
@@ -461,6 +478,7 @@ export default function TngAutoCapture({
           </h3>
           <p style={{ fontSize: '0.71rem', color: 'var(--text-muted)', marginBottom: '0.75rem', lineHeight: 1.5 }}>
             这些侦测到金额，但看不出买了什么，所以没有自动记录。
+            {queue.some(q => q.isMoneyIn) && ' 进账也放在这里 — 同一笔钱 TNG 有时会发两则通知，自动记会变两笔。'}
           </p>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -468,26 +486,35 @@ export default function TngAutoCapture({
               const acc = accountById(accounts, item.accountId);
               return (
               <div key={item.id} className="glass-card" style={{
-                padding: '0.85rem', border: '1px solid var(--color-diet)',
-                background: 'var(--color-diet-soft)',
+                padding: '0.85rem',
+                border: `1px solid ${item.isMoneyIn ? 'var(--color-money)' : 'var(--color-diet)'}`,
+                background: item.isMoneyIn ? 'var(--color-money-soft)' : 'var(--color-diet-soft)',
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: '0.86rem', fontWeight: '700' }}>{item.merchant || '未知'}</div>
+                    <div style={{ fontSize: '0.86rem', fontWeight: '700' }}>
+                      {item.merchant || (item.isMoneyIn ? '有钱进来' : '未知')}
+                    </div>
                     <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                       {item.time}
-                      {item.isTransfer ? ' · 汇款' : ''}
+                      {item.isMoneyIn ? ' · 进账' : ''}
+                      {item.isTransfer && !item.isMoneyIn ? ' · 汇款' : ''}
                       {/* An unread wording, not just an unread shop. Worth
                           saying out loud: these used to vanish into the capture
                           log, where an unrecognised real payment looked exactly
                           like no payment at all. */}
                       {item.unrecognised ? ' · 看不懂这则通知' : ''}
-                      {acc && <> · 从 <span style={{ color: typeMeta(acc.type).color }}>{acc.name}</span> 扣</>}
+                      {acc && (item.isMoneyIn
+                        ? <> · 进 <span style={{ color: typeMeta(acc.type).color }}>{acc.name}</span></>
+                        : <> · 从 <span style={{ color: typeMeta(acc.type).color }}>{acc.name}</span> 扣</>)}
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                    <span style={{ fontSize: '1rem', fontWeight: '800', color: 'var(--color-accent-red)' }}>
-                      RM {num(item.amount).toFixed(2)}
+                    <span style={{
+                      fontSize: '1rem', fontWeight: '800',
+                      color: item.isMoneyIn ? 'var(--color-money)' : 'var(--color-accent-red)',
+                    }}>
+                      {item.isMoneyIn ? '+' : ''}RM {Math.abs(num(item.amount)).toFixed(2)}
                     </span>
                     <button onClick={() => setQueue(queue.filter(q => q.id !== item.id))}
                       aria-label="忽略" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}>
@@ -508,24 +535,40 @@ export default function TngAutoCapture({
                   </div>
                 )}
 
+                {/* Two notifications, one ringgit. Said on the card rather
+                    than resolved behind his back — the parser cannot know
+                    whether the other one arrived. */}
+                {item.possibleDuplicate && (
+                  <div style={{
+                    fontSize: '0.66rem', color: 'var(--color-accent-amber)', marginTop: '8px',
+                    lineHeight: 1.5,
+                  }}>
+                    这是 GO+ 那则通知。同一笔钱有时会另外再发一则（写着谁转给你），
+                    如果那笔你已经记了，这个按垃圾桶删掉就好。
+                  </div>
+                )}
+
                 <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
                   <div style={{ flex: 1 }}>
-                    <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>这笔是什么？</label>
+                    <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+                      {item.isMoneyIn ? '谁给的 / 什么钱？（可以不填）' : '这笔是什么？'}
+                    </label>
                     <input
                       type="text"
-                      value={item.note}
-                      onChange={(e) => updateItem(item.id, { note: e.target.value })}
-                      placeholder={item.isTransfer ? '例：分摊晚餐' : '例：手机壳'}
+                      value={item.isMoneyIn ? item.merchant : item.note}
+                      onChange={(e) => updateItem(item.id,
+                        item.isMoneyIn ? { merchant: e.target.value } : { note: e.target.value })}
+                      placeholder={item.isMoneyIn ? '例：阿明 / 爸爸生活费' : item.isTransfer ? '例：分摊晚餐' : '例：手机壳'}
                       style={inputStyle}
                     />
                   </div>
                   <div style={{ width: '38%' }}>
                     <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>分类</label>
-                    {/* Always the expense list: this queue only ever holds
-                        money that LEFT the wallet — an income notification is
-                        logged and reported, never parked here for review. */}
+                    {/* The queue holds both directions now, so the vocabulary
+                        has to follow — offering 餐饮 for money arriving was the
+                        kind of wrong that teaches you to ignore the field. */}
                     <CategorySelect
-                      txType="expense"
+                      txType={item.isMoneyIn ? 'income' : 'expense'}
                       value={item.category}
                       onChange={(id) => updateItem(item.id, { category: id })}
                       style={inputStyle}
@@ -534,7 +577,9 @@ export default function TngAutoCapture({
                 </div>
 
                 <div style={{ marginTop: '8px' }}>
-                  <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>从哪个户口出</label>
+                  <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+                    {item.isMoneyIn ? '进哪个户口' : '从哪个户口出'}
+                  </label>
                   <AccountSelect
                     accounts={accounts}
                     value={item.accountId}
@@ -543,17 +588,24 @@ export default function TngAutoCapture({
                   />
                 </div>
 
+                {item.isMoneyIn && (
+                  <p style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
+                    户口余额会加，但<strong>本月收入不会动</strong> — 去「本月」把它归到一个来源，
+                    才知道这是不是你已经列过的那一笔。
+                  </p>
+                )}
+
                 <button
                   onClick={() => confirmItem(item)}
-                  disabled={!item.note.trim()}
+                  disabled={!item.isMoneyIn && !item.note.trim()}
                   className="btn-primary"
                   style={{
                     width: '100%', marginTop: '10px', fontSize: '0.8rem', padding: '0.6rem',
-                    opacity: item.note.trim() ? 1 : 0.45,
-                    cursor: item.note.trim() ? 'pointer' : 'not-allowed',
+                    opacity: item.isMoneyIn || item.note.trim() ? 1 : 0.45,
+                    cursor: item.isMoneyIn || item.note.trim() ? 'pointer' : 'not-allowed',
                   }}
                 >
-                  <Check size={15} /> {item.note.trim() ? '记录' : '先填这笔是什么'}
+                  <Check size={15} /> {item.isMoneyIn ? '记录这笔进账' : item.note.trim() ? '记录' : '先填这笔是什么'}
                 </button>
               </div>
               );
