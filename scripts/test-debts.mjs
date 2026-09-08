@@ -18,6 +18,8 @@ import {
   totalRepaidInCycle, REPAYMENT_CATEGORY,
   buildSchedule, buildInstalments, rebuildSchedule, setInstalmentAmount,
   removeInstalment, scheduleSummary, commitmentOf, scheduledForCycle, hasCyclePlan,
+  isDebtSkippedInCycle, setDebtCycleSkip, instalmentDueInCycle, addToDebt,
+  repaymentOutlook,
 } from '../src/utils/debts.js';
 import { getCycle, computeCycleBudget, grossSpentByDayIndex } from '../src/utils/cycle.js';
 import { debtOutstanding, computeNetPosition } from '../src/utils/networth.js';
@@ -316,6 +318,101 @@ check('a flat debt is', commitmentOf(ahMeng), 'flexible');
 // buildSchedule stays the primitive underneath, taking explicit amounts.
 check('the primitive still accepts a list of amounts',
   buildSchedule('2026-09-10', [1, 2, 3]).map(i => i.amount), [1, 2, 3]);
+
+// --- 「这个月不算这一笔」 ----------------------------------------------------
+// Its own map, deliberately not "plan = 0": ticking off must not overwrite the
+// figure he typed, or unticking would have nothing to restore.
+check('a debt nobody ticked off is on', isDebtSkippedInCycle(spaylater, cycle), false);
+
+const withPlan = setCyclePlan([spaylater], 1, cycle.start, 150);
+const ticked = setDebtCycleSkip(withPlan, 1, cycle.start, true);
+near('ticked off reserves nothing', reservedForCycle(ticked[0], [], cycle), 0);
+check('...and it outranks a figure he typed', plannedForCycle(ticked[0], cycle), 0);
+check('...which is still sitting there untouched', ticked[0].plan[cycle.start], 150);
+near('...and comes back when he unticks',
+  plannedForCycle(setDebtCycleSkip(ticked, 1, cycle.start, false)[0], cycle), 150);
+check('unticking deletes the key rather than storing false',
+  setDebtCycleSkip(ticked, 1, cycle.start, false)[0].skipped, {});
+near('...next cycle is untouched', plannedForCycle(ticked[0], getCycle(new Date(2026, 8, 20))), 246.06);
+near('a ticked-off debt still reserves money that actually moved',
+  reservedForCycle(ticked[0], [repayment(1, 80, '2026-08-20')], cycle), 80);
+check('...and the row says why it is zero rather than looking unplanned',
+  debtsForCycle(ticked, [], cycle)[0].skipped, true);
+near('...while the schedule still reports what it wanted',
+  debtsForCycle(ticked, [], cycle)[0].suggested, 299.30);
+
+// --- which instalment belongs to THIS month ---------------------------------
+// The bug this closes: 本期扣款日 printed `nextInstalment`, which is the next
+// unpaid one ever — so an October instalment appeared under 「这个月」.
+check('the instalment due this cycle is this cycle\'s',
+  instalmentDueInCycle(spaylater, cycle).due, '2026-08-15');
+check('a cycle with no instalment due says so instead of borrowing a later one',
+  instalmentDueInCycle(spaylater, getCycle(new Date(2026, 10, 20))), null);
+check('a debt with no schedule has no due date at all',
+  instalmentDueInCycle(ahMeng, cycle), null);
+
+// --- the debt got bigger ----------------------------------------------------
+// 「我的spaylater会增加就是200变成250」 — a known extra joining an existing plan.
+const bumped = addToDebt([spaylater], 1, { amount: 50, mode: 'next' });
+check('adding to the next instalment leaves the others alone',
+  bumped[0].schedule.map(i => i.amount), [349.30, 246.06, 246.08]);
+near('...so the debt owes exactly that much more',
+  statedRemaining(bumped[0]) - statedRemaining(spaylater), 50);
+
+const spread = addToDebt([spaylater], 1, { amount: 60, mode: 'even' });
+check('spreading evenly raises every unpaid instalment',
+  spread[0].schedule.map(i => i.amount), [319.30, 266.06, 266.08]);
+near('...and still adds up to exactly what was added',
+  statedRemaining(spread[0]) - statedRemaining(spaylater), 60);
+
+const appended = addToDebt([spaylater], 1, { amount: 100, mode: 'append', count: 4 });
+check('appending adds new instalments after the last one',
+  appended[0].schedule.slice(3).map(i => [i.due, i.amount]),
+  [['2026-11-15', 25], ['2026-12-15', 25], ['2027-01-15', 25], ['2027-02-15', 25]]);
+check('...and leaves the existing plan exactly as it was',
+  appended[0].schedule.slice(0, 3).map(i => i.amount), [299.30, 246.06, 246.08]);
+
+// A rounding remainder has to land somewhere, and it lands on the last row —
+// three ways of splitting RM100 that each have to total RM100.
+const odd = addToDebt([spaylater], 1, { amount: 100, mode: 'append', count: 3 });
+near('an uneven split still totals what was added',
+  sumOf(odd[0].schedule.slice(3)), 100);
+near('an uneven even-spread still totals what was added',
+  statedRemaining(addToDebt([spaylater], 1, { amount: 100, mode: 'even' })[0])
+  - statedRemaining(spaylater), 100);
+
+const paidThenBumped = addToDebt([partPaid], partPaid.id, { amount: 30, mode: 'even' })[0];
+check('a settled instalment is never rewritten, whatever the mode',
+  paidThenBumped.schedule.filter(i => i.paid).map(i => i.amount), [365.70, 262.66]);
+check('...so the whole 30 lands on the one unpaid row',
+  paidThenBumped.schedule.filter(i => !i.paid).map(i => i.amount), [292.68]);
+
+check('a debt with no schedule just owes more',
+  addToDebt([ahMeng], 2, { amount: 120, mode: 'even' })[0].amount, 620);
+check('adding nothing changes nothing',
+  addToDebt([spaylater], 1, { amount: 0 })[0].schedule.map(i => i.amount),
+  spaylater.schedule.map(i => i.amount));
+
+// --- the months ahead -------------------------------------------------------
+const outlook = repaymentOutlook([spaylater, ahMeng], [], cycle, 4, (d) => getCycle(d));
+check('one row per month, starting with the current one',
+  outlook.map(m => m.start), ['2026-08-01', '2026-09-01', '2026-10-01', '2026-11-01']);
+near('each month totals its own instalments', outlook[1].total, 246.06);
+check('a month with nothing due is shown as empty rather than skipped',
+  [outlook[3].rows.length, outlook[3].total], [0, 0]);
+check('a flexible debt claims no future month it never committed to',
+  outlook.slice(1).every(m => m.rows.every(r => r.fixed)), true);
+
+// The current month is the exception: a decision may already exist there, and
+// this table must not contradict the screen he made it on.
+const decided = setCyclePlan([ahMeng], 2, cycle.start, 200);
+const withDecision = repaymentOutlook([spaylater, ...decided], [], cycle, 2, (d) => getCycle(d));
+near('the current month counts what he actually planned', withDecision[0].total, 299.30 + 200);
+check('...including the flexible one, because that month it IS decided',
+  withDecision[0].rows.some(r => r.creditor === '阿明'), true);
+check('a debt ticked off this month drops out of the table too',
+  repaymentOutlook(setDebtCycleSkip([spaylater], 1, cycle.start, true), [], cycle, 2, (d) => getCycle(d))[0].rows.length,
+  0);
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : fail + ' FAILED'}  (${pass} passed)`);
 if (fail > 0) process.exit(1);

@@ -14,7 +14,9 @@ import {
   nextDueDate, daysUntilDue, upcoming, setCycleSkip, setCycleActual,
 } from '../utils/recurring';
 import { nextInstalment } from '../utils/networth';
-import { debtsForCycle, setCyclePlan, makeRepayment } from '../utils/debts';
+import {
+  debtsForCycle, setCyclePlan, makeRepayment, setDebtCycleSkip, instalmentDueInCycle,
+} from '../utils/debts';
 import { resolveAccounts, defaultAccount, accountById, isRealSpend } from '../utils/accounts';
 import { AccountSelect, AccountChip } from './AccountPicker';
 import ImpulseSandbox from './ImpulseSandbox';
@@ -134,14 +136,18 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
       // Pre-resolved so computeCycleBudget doesn't have to know that a debt
       // isn't a recurring bill — see cycle.js.
       budgeted: r.reserved, charged: r.reserved,
-      due: r.fixed ? nextInstalment(r.debt)?.due ?? null : null,
+      // THIS cycle's instalment, not the next one ever. `nextInstalment` skips
+      // paid rows and keeps walking forward, so on a plan already settled for
+      // this month it returned NEXT month's — and 本期扣款日 printed a December
+      // date under the heading 「本期」. See instalmentDueInCycle in debts.js.
+      due: instalmentDueInCycle(r.debt, cycle)?.due ?? null,
       accountId: r.debt.accountId ?? null,
       estimated: false, auto: true,
       // "Paid" here is derived from real repayments, not a checkbox — the
       // money either moved or it didn't.
       paid: r.repaid >= r.reserved,
       debtId: r.debt.id, repaid: r.repaid, planned: r.planned, fixed: r.fixed,
-    })), [debtRows]);
+    })), [debtRows, cycle]);
 
   // `paidFor` stores which cycle a commitment was settled for, so "paid" clears
   // itself every payday instead of needing a manual reset. `budgeted`/`charged`
@@ -193,6 +199,17 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
       limit: 14,
     }),
     [allocations, cycle, autoAllocations]
+  );
+
+  // Money this cycle has to find that lands on no particular day: a debt you
+  // pay when you pay it, or a plan whose instalment for this month is already
+  // settled. They were simply MISSING from 本期扣款日 — the list is built from
+  // due dates and they have none — so 「这个月要还的」 quietly excluded exactly
+  // the debts the user is freest to forget. They get their own block rather
+  // than a made-up date.
+  const undatedDebts = useMemo(
+    () => autoAllocations.filter(a => !a.due && a.amount > 0),
+    [autoAllocations]
   );
 
   const budget = useMemo(
@@ -508,6 +525,11 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
    */
   const toggleSkip = (a) => {
     setAllocations(setCycleSkip(loadJSON('allocations', []), a.id, cycle.start, !a.skipped));
+  };
+
+  /** The same tick, for a debt. Never touches the figure in the box. */
+  const toggleDebtSkip = (r) => {
+    setDebts(setDebtCycleSkip(loadJSON('debts', []), r.debt.id, cycle.start, !r.skipped));
   };
 
   // The bill the edit form is currently open on, re-derived from the live list
@@ -845,12 +867,13 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
           say that RM 500 of it leaves tomorrow. Bills and debt instalments are
           merged into one date-ordered list — they leave the same accounts on
           the same calendar, and splitting them made the user do the merge. */}
-      {upcomingPayments.length > 0 && (
+      {(upcomingPayments.length > 0 || undatedDebts.length > 0) && (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '0.7rem' }}>
             <CalendarClock size={17} color="var(--color-diet)" />
             <h3 style={{ fontSize: '1rem', fontWeight: '700' }}>本期扣款日 Upcoming</h3>
           </div>
+          {upcomingPayments.length > 0 && (
           <div className="glass-card" style={{ padding: '0.6rem 0.75rem' }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {upcomingPayments.map((u, i) => {
@@ -904,6 +927,45 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
               })}
             </div>
           </div>
+
+          )}
+
+          {/* Owed this month, on no particular day. Before this they were not
+              on this screen at all: 「想还多少还多少」 debts have no due date by
+              definition, and a plan whose instalment for the month is already
+              settled has none left either — so the list headed 「这个月要给出去
+              的钱」 was silently missing them. No invented date: they are
+              grouped and labelled as having none. */}
+          {undatedDebts.length > 0 && (
+            <div className="glass-card" style={{ padding: '0.6rem 0.75rem', marginTop: upcomingPayments.length > 0 ? '8px' : 0 }}>
+              <div style={{ fontSize: '0.63rem', color: 'var(--text-muted)', padding: '2px 0 6px' }}>
+                这个月要还，但没有指定哪一天 — 你自己决定几时
+              </div>
+              {undatedDebts.map((a, i) => (
+                <div key={a.id} style={{
+                  display: 'flex', alignItems: 'center', gap: '10px', padding: '0.5rem 0.15rem',
+                  borderTop: i === 0 ? '1px solid var(--border-glass)' : '1px solid var(--border-glass)',
+                }}>
+                  <div style={{
+                    flexShrink: 0, width: '38px', textAlign: 'center', borderRadius: 'var(--radius-sm)',
+                    padding: '3px 0', background: 'var(--bg-input)', border: '1px solid var(--border-glass)',
+                    fontSize: '0.62rem', color: 'var(--text-muted)', lineHeight: 1.6,
+                  }}>
+                    随时
+                  </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '0.8rem', fontWeight: '600' }}>{a.label}</div>
+                    <div style={{ marginTop: '2px' }}>
+                      <AccountChip accounts={accounts} accountId={a.accountId} size="xs" />
+                    </div>
+                  </div>
+                  <span style={{ fontSize: '0.88rem', fontWeight: '800', flexShrink: 0, color: 'var(--color-accent-red)' }}>
+                    {money(a.amount)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Bills with no account named are a hole: the app can tell you the
               money is going but not from where, which is exactly the state the
@@ -1015,8 +1077,29 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                 display: 'flex', flexDirection: 'column', gap: '8px',
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: '0.85rem', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {/* 「这个月要不要算这一笔」 — the same tick the bills got,
+                      for the same reason and in the same place. Ticking off
+                      does NOT touch the figure in the box below, so unticking
+                      restores exactly what was there. See debts.js. */}
+                  <button
+                    type="button"
+                    onClick={() => toggleDebtSkip(r)}
+                    aria-label={r.skipped ? `这个月要还 ${r.debt.creditor}` : `这个月不还 ${r.debt.creditor}`}
+                    title={r.skipped ? '这个月不算 — 按一下算回来' : '这个月要算 — 按一下改成不算'}
+                    style={{
+                      flexShrink: 0, background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                      marginTop: '1px',
+                      color: r.skipped ? 'var(--text-muted)' : 'var(--color-money)',
+                      display: 'flex', alignItems: 'center',
+                    }}
+                  >
+                    {r.skipped ? <Square size={17} /> : <CheckSquare size={17} />}
+                  </button>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{
+                      fontSize: '0.85rem', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px',
+                      textDecoration: r.skipped ? 'line-through' : 'none',
+                    }}>
                       {r.debt.creditor}
                       <span style={{
                         fontSize: '0.55rem', fontWeight: '800', padding: '1px 5px',
@@ -1029,11 +1112,34 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                     </div>
                     <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                       还欠 {money(r.outstanding)}
+                      {/* The NEXT one ever, which is the right thing to say on
+                          a row about the debt itself. What belongs to THIS
+                          month is a different question and is answered by the
+                          box below — 本期扣款日 used to print this figure and
+                          call it 「这个月」. */}
                       {r.fixed && nextInstalment(r.debt) && ` · 下一期 ${nextInstalment(r.debt).due}`}
                     </div>
                   </div>
                   <AccountChip accounts={accounts} accountId={r.debt.accountId} size="xs" />
                 </div>
+
+                {/* Ticked off: everything below is about paying it this month,
+                    and it isn't being paid this month. One line instead, saying
+                    what turning it back on would put back. */}
+                {r.skipped && (
+                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                    这个月不算这一笔
+                    {r.suggested > 0 && <> · 勾回来是 {money(r.suggested)}</>}
+                    {r.repaid > 0 && (
+                      <>
+                        {' · '}
+                        <strong style={{ color: 'var(--color-money)' }}>
+                          不过你这个月已经还了 {money(r.repaid)}，那笔照算
+                        </strong>
+                      </>
+                    )}
+                  </div>
+                )}
 
                 {r.progressPct != null && r.progressPct > 0 && (
                   <div style={{ height: '4px', background: 'var(--border-glass)', borderRadius: 'var(--radius-sm)' }}>
@@ -1047,6 +1153,8 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                 {/* ONE box, both kinds — the figure this cycle actually
                     reserves. A schedule fills it in for you and keeps saying
                     what it wanted underneath; typing over it wins. */}
+                {!r.skipped && (
+                <>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.72rem' }}>
                   <span style={{ color: 'var(--text-secondary)', flexShrink: 0 }}>这个月还</span>
                   <input
@@ -1103,6 +1211,8 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                   >
                     <Banknote size={13} /> 记一笔还款
                   </button>
+                )}
+                </>
                 )}
               </div>
             );

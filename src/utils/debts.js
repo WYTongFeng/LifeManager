@@ -143,6 +143,42 @@ export function hasCyclePlan(debt, cycle) {
 }
 
 /**
+ * 「这个月不算这一笔」 — a per-cycle off switch, keyed by cycle start.
+ *
+ * WHY NOT JUST TYPE 0
+ * You can, and it means the same thing to the arithmetic. It does not mean the
+ * same thing to read. A row saying RM0.00 with a box you could have typed
+ * anything into looks like a debt you forgot to plan; a row that is ticked off
+ * looks like a decision. The user asked for the tick by name — 「让我勾哪些要
+ * 出现在这个月」 — and a tick that secretly writes into the same field he types
+ * amounts into would fight him the moment he typed one.
+ *
+ * So it is its own map, and it OUTRANKS the plan: skipped means 0 reserved and
+ * off the calendar, whatever the schedule or the box says. Untick and whatever
+ * was there before comes back untouched — which is the whole reason it isn't
+ * implemented by overwriting the plan with 0.
+ *
+ * Repayments actually made are NOT hidden by it. Money that moved, moved: see
+ * `reservedForCycle`, which still reserves what was really paid.
+ */
+export function isDebtSkippedInCycle(debt, cycle) {
+  return Boolean(cycle) && Boolean(debt?.skipped?.[cycle.start]);
+}
+
+/** Switch one debt off (or back on) for one cycle. */
+export function setDebtCycleSkip(debts = [], debtId, cycleStart, skip) {
+  return debts.map(d => {
+    if (String(d.id) !== String(debtId)) return d;
+    const skipped = { ...(d.skipped ?? {}) };
+    // Deleted rather than stored as false, so the map only ever holds the
+    // exceptions — same rule as recurring.js's.
+    if (skip) skipped[cycleStart] = true;
+    else delete skipped[cycleStart];
+    return { ...d, skipped };
+  });
+}
+
+/**
  * What this cycle is supposed to cost.
  *
  * ONE RULE FOR BOTH KINDS: what you decided, and only failing that, what the
@@ -165,6 +201,11 @@ export function hasCyclePlan(debt, cycle) {
  */
 export function plannedForCycle(debt, cycle) {
   if (!cycle) return 0;
+  // Ticked off for this cycle. Outranks both the box and the schedule — see
+  // isDebtSkippedInCycle. Deliberately NOT applied to `scheduledForCycle`,
+  // which keeps answering "what the plan wanted": a row that is ticked off
+  // should still be able to say what it would have cost.
+  if (isDebtSkippedInCycle(debt, cycle)) return 0;
   const chosen = debt?.plan?.[cycle.start];
   if (chosen != null) return num(chosen);
   return scheduledForCycle(debt, cycle);
@@ -265,8 +306,219 @@ export function debtsForCycle(debts = [], expenses = [], cycle) {
       // can leave the bar out instead of drawing a permanently empty one.
       progressPct: original > 0 ? Math.min(100, ((original - outstanding) / original) * 100) : null,
       settled: outstanding <= 0,
+      // Ticked off for this cycle. `planned` is already 0 because of it — this
+      // flag exists so the row can say WHY it is 0 rather than looking like a
+      // debt nobody got round to planning.
+      skipped: isDebtSkippedInCycle(debt, cycle),
     };
   });
+}
+
+/**
+ * The instalment this cycle actually wants, if any — the row's real due date.
+ *
+ * `nextInstalment` (networth.js) answers a different question: the next unpaid
+ * one, ever. Putting that on a calendar headed 本期扣款日 is how a December
+ * instalment ended up printed under 「这个月」 — true about the debt, false
+ * about the month, and the reader has no way to tell which they are looking at.
+ */
+export function instalmentDueInCycle(debt, cycle) {
+  if (!cycle || !isFixedDebt(debt)) return null;
+  return debt.schedule
+    .filter(i => !i.paid && isInCycle(String(i.due), cycle))
+    .sort((a, b) => String(a.due).localeCompare(String(b.due)))[0] ?? null;
+}
+
+// --- growing a debt ---------------------------------------------------------
+//
+// SPayLater does not hold still. A new Shopee purchase lands on the same plan
+// and the instalment goes from RM200 to RM250 — the user's words: 「我的
+// spaylater会增加就是200变成250就是很麻烦，就是很难更改原本的」.
+//
+// Everything the app offered was "describe the whole plan again": the generator
+// rebuilds the unpaid tail from scratch, and the per-row editor makes you find
+// the row and do the addition yourself. Both are the wrong shape for what
+// actually happened, which is that a KNOWN EXTRA AMOUNT joined an existing
+// plan. So this takes the extra and asks only where to put it.
+
+/** Where an added amount lands on an existing plan. */
+export const ADD_MODES = [
+  { value: 'next', label: '加到下一期', hint: '下一期那笔变大，其他不动' },
+  { value: 'even', label: '平均分到剩下每一期', hint: '每期都变大一点点' },
+  { value: 'append', label: '加在最后，多几期', hint: '现有的都不动，后面接上去' },
+];
+
+/**
+ * Add money to a debt that got bigger.
+ *
+ * A debt with no schedule just owes more, and that is the whole operation.
+ * A scheduled one has three honest answers and no way to guess between them,
+ * so `mode` is asked rather than assumed.
+ *
+ * Paid instalments are never touched, in any mode — 'even' spreads across the
+ * UNPAID ones only. Rewriting a settled row would make `debtOutstanding` jump
+ * by money that has already left.
+ *
+ * @param {Array}  debts
+ * @param {any}    debtId
+ * @param {object} spec
+ * @param {number} spec.amount     how much bigger the debt got
+ * @param {string} spec.mode       one of ADD_MODES
+ * @param {number} spec.count      'append' only: over how many new instalments
+ * @param {string} spec.frequency  'append' only: how far apart they fall
+ */
+export function addToDebt(debts = [], debtId, { amount, mode = 'next', count = 1, frequency = 'monthly' } = {}) {
+  const extra = num(amount);
+  if (!(extra > 0)) return debts;
+
+  return debts.map(d => {
+    if (String(d.id) !== String(debtId)) return d;
+
+    if (!isFixedDebt(d)) return { ...d, amount: num(d.amount) + extra };
+
+    const unpaid = d.schedule.filter(i => !i.paid);
+
+    if (mode === 'append' || unpaid.length === 0) {
+      // After the last instalment there is, paid ones included — appending
+      // before a row that already exists would silently reorder the plan.
+      const last = [...d.schedule].sort((a, b) => String(a.due).localeCompare(String(b.due))).pop();
+      const n = Math.max(1, Math.floor(num(count)) || 1);
+      const step = frequency === 'weekly' ? 7 : frequency === 'biweekly' ? 14 : 0;
+      const [ly, lm, ld] = String(last?.due ?? '').split('-').map(Number);
+      const base = Number.isFinite(ly) ? new Date(ly, lm - 1, ld) : new Date();
+      const firstDue = step > 0
+        ? new Date(base.getFullYear(), base.getMonth(), base.getDate() + step)
+        : new Date(base.getFullYear(), base.getMonth() + 1, base.getDate());
+      const per = Math.round((extra / n) * 100) / 100;
+      const amounts = Array(n).fill(per);
+      // The rounding remainder rides on the last row, so the plan still totals
+      // exactly what was added — the same rule buildInstalments uses.
+      amounts[n - 1] = Math.round((extra - per * (n - 1)) * 100) / 100;
+      const firstDueStr = `${firstDue.getFullYear()}-${String(firstDue.getMonth() + 1).padStart(2, '0')}-${String(firstDue.getDate()).padStart(2, '0')}`;
+      return {
+        ...d,
+        schedule: [...d.schedule, ...buildSchedule(firstDueStr, amounts, n, frequency)]
+          .sort((a, b) => String(a.due).localeCompare(String(b.due))),
+      };
+    }
+
+    if (mode === 'even') {
+      const per = Math.round((extra / unpaid.length) * 100) / 100;
+      let spent = 0;
+      let seen = 0;
+      return {
+        ...d,
+        schedule: d.schedule.map(i => {
+          if (i.paid) return i;
+          seen += 1;
+          const share = seen === unpaid.length
+            ? Math.round((extra - spent) * 100) / 100
+            : per;
+          spent += share;
+          return { ...i, amount: Math.round((num(i.amount) + share) * 100) / 100 };
+        }),
+      };
+    }
+
+    // 'next' — the RM200-becomes-RM250 case, said the way it happened.
+    const target = [...unpaid].sort((a, b) => String(a.due).localeCompare(String(b.due)))[0];
+    return {
+      ...d,
+      schedule: d.schedule.map(i => (i.due === target.due && !i.paid
+        ? { ...i, amount: Math.round((num(i.amount) + extra) * 100) / 100 }
+        : i)),
+    };
+  });
+}
+
+// --- the months ahead -------------------------------------------------------
+//
+// Every debt screen in the app answered a question about NOW: what is owed in
+// total, what this cycle wants. Neither says whether November is survivable,
+// which is the question an instalment plan exists to raise — 「我也希望可以看到
+// 后几个月的欠款，给我单独看欠款，每个月要还多少」.
+
+/**
+ * What each of the next `months` cycles has to pay, debt by debt.
+ *
+ * Only SCHEDULED debts can appear in a future month, and that is the honest
+ * answer rather than a gap: a flexible debt has no monthly figure until the
+ * month arrives and you decide one (see the header). Inventing one would put a
+ * commitment on the calendar that nobody made — the exact thing the repayment
+ * waterfall was removed for.
+ *
+ * The CURRENT cycle is different, because there a decision may already exist:
+ * its rows are what is actually reserved (`plannedForCycle`), so the first
+ * month of this table and the 这个月还债 screen cannot disagree.
+ *
+ * @param {Array} debts
+ * @param {Array} expenses    for "already repaid this cycle"
+ * @param {object} cycle      the current cycle, from getCycle()
+ * @param {number} months     how far ahead, including the current cycle
+ * @param {function} cycleAt  (date) => cycle. Injected so this stays pure and
+ *                            testable, and so cycle.js's start-day rule is
+ *                            never re-implemented here by hand.
+ */
+export function repaymentOutlook(debts = [], expenses = [], cycle, months = 12, cycleAt) {
+  if (!cycle || typeof cycleAt !== 'function') return [];
+  const out = [];
+
+  for (let m = 0; m < Math.max(1, months); m += 1) {
+    // Mid-month, so a cycle that starts on the 1st is unambiguous and a
+    // month-end date can never roll into the following one.
+    const probe = new Date(cycle.startDate.getFullYear(), cycle.startDate.getMonth() + m, 15);
+    const c = cycleAt(probe);
+    const current = c.start === cycle.start;
+
+    const rows = [];
+    for (const debt of debts) {
+      if (isDebtSkippedInCycle(debt, c)) continue;
+
+      if (current) {
+        const planned = plannedForCycle(debt, c);
+        const repaid = repaidInCycle(debt, expenses, c);
+        const amount = Math.max(planned, repaid);
+        if (amount <= 0) continue;
+        rows.push({
+          debtId: debt.id,
+          creditor: debt.creditor ?? '欠款',
+          amount,
+          due: instalmentDueInCycle(debt, c)?.due ?? null,
+          fixed: isFixedDebt(debt),
+          repaid,
+          done: repaid >= amount - 0.005,
+        });
+        continue;
+      }
+
+      if (!isFixedDebt(debt)) continue;
+      const dueRows = debt.schedule.filter(i => !i.paid && isInCycle(String(i.due), c));
+      for (const i of dueRows) {
+        rows.push({
+          debtId: debt.id,
+          creditor: debt.creditor ?? '欠款',
+          amount: num(i.amount),
+          due: i.due,
+          fixed: true,
+          repaid: 0,
+          done: false,
+        });
+      }
+    }
+
+    rows.sort((a, b) => String(a.due ?? '9999').localeCompare(String(b.due ?? '9999')));
+    out.push({
+      start: c.start,
+      end: c.end,
+      year: c.startDate.getFullYear(),
+      month: c.startDate.getMonth() + 1,
+      current,
+      rows,
+      total: sumBy(rows, r => r.amount),
+    });
+  }
+
+  return out;
 }
 
 /** Total reserved across every debt — what cycle.js holds back from the budget. */

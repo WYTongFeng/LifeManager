@@ -16,8 +16,10 @@ import {
 import { getCycle } from '../utils/cycle';
 import {
   INSTALMENT_FREQUENCIES, buildInstalments, rebuildSchedule, setInstalmentAmount,
-  removeInstalment, scheduleSummary,
+  removeInstalment, scheduleSummary, addToDebt, ADD_MODES, repaymentOutlook,
+  isFixedDebt,
 } from '../utils/debts';
+import { cycleCost } from '../utils/recurring';
 
 // Deliberately empty. Real balances used to be hardcoded here, which meant
 // anyone who opened the deployed site's JS bundle could read them — the app is
@@ -93,6 +95,20 @@ export default function AccountsView({ expenses = [] }) {
   const [dFreq, setDFreq] = useState('monthly');
   const [dFinal, setDFinal] = useState('');
 
+  // 「这笔欠款变大了」 — its own small form, not a field in the edit form.
+  // Adding to a plan is a frequent, one-number action; editing the plan is a
+  // rare, careful one. Putting the first inside the second is what made
+  // RM200 → RM250 feel like 「很难更改原本的」. See addToDebt in debts.js.
+  const [addFor, setAddFor] = useState(null);
+  const [aAmount, setAAmount] = useState('');
+  const [aMode, setAMode] = useState('next');
+  const [aCount, setACount] = useState('3');
+
+  // How far the repayment table looks ahead. 6 by default because that is
+  // roughly how far a SPayLater plan runs; 12 answers "does next year clear".
+  const [outlookMonths, setOutlookMonths] = useState(6);
+  const [showOutlook, setShowOutlook] = useState(false);
+
   // Live balances, folded in once here so every consumer below (net position,
   // the debt list, the account list itself) reads the same derived number.
   const accounts = useMemo(() => resolveAccounts(rawAccounts, expenses), [rawAccounts, expenses]);
@@ -150,6 +166,23 @@ export default function AccountsView({ expenses = [] }) {
     () => getWaterfallOrder(accounts, debts, null, expenses, cycle),
     [accounts, debts, expenses, cycle],
   );
+
+  // 「每个月要还多少」, forward. Every other debt figure in the app is about
+  // now — 总共欠, 这个月还多少 — and none of them answers whether November is
+  // survivable, which is the only question an instalment plan raises.
+  //
+  // The fixed monthly bills are folded in as a separate, muted column on
+  // purpose: 「有一个是固定开销那个看爽而已」. A month's instalments alone read
+  // as affordable right up until you remember the rent, and the point of
+  // looking six months out is to be surprised NOW rather than then.
+  const outlook = useMemo(() => {
+    const rows = repaymentOutlook(debts, expenses, cycle, outlookMonths, (d) => getCycle(d));
+    return rows.map(m => {
+      const monthCycle = { ...cycle, start: m.start, end: m.end, startDate: new Date(m.year, m.month - 1, 1) };
+      const bills = allocations.reduce((t, a) => t + cycleCost(a, monthCycle).charged, 0);
+      return { ...m, bills, grandTotal: m.total + bills };
+    });
+  }, [debts, expenses, cycle, outlookMonths, allocations]);
 
   // --- accounts ---
   // `balance`/`spentSinceOpening` are computed on read (resolveAccounts) — they
@@ -236,6 +269,27 @@ export default function AccountsView({ expenses = [] }) {
   };
 
   const openAddDebt = () => { resetDebtForm(); setDebtModal(true); };
+
+  // --- the debt got bigger ---
+  const openAddTo = (d) => {
+    setAddFor(d);
+    setAAmount('');
+    // A flat debt has nowhere to put it but the total, so the mode question is
+    // meaningless there and the form hides it.
+    setAMode('next');
+    setACount('3');
+  };
+
+  const submitAddTo = (e) => {
+    e.preventDefault();
+    const amount = Number(aAmount);
+    if (!addFor || !Number.isFinite(amount) || amount <= 0) return;
+    setDebts(addToDebt(loadJSON('debts', []), addFor.id, {
+      amount, mode: aMode, count: Number(aCount) || 1,
+      frequency: addFor.instalmentFrequency ?? 'monthly',
+    }));
+    setAddFor(null); setAAmount('');
+  };
 
   const openEditDebt = (d) => {
     setEditingId(d.id);
@@ -752,6 +806,23 @@ export default function AccountsView({ expenses = [] }) {
                     }} />
                   </div>
                 )}
+
+                {/* 「这笔变大了」 — one tap, one number.
+                    SPayLater grows when a new purchase joins the plan, and the
+                    only ways to say so were to find the row in the schedule
+                    editor and do the addition by hand, or to regenerate the
+                    whole tail. Both describe the plan again; neither describes
+                    what happened. */}
+                {debtRow && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); openAddTo(debtRow); }}
+                    className="btn-secondary"
+                    style={{ marginTop: '9px', width: '100%', fontSize: '0.7rem', padding: '0.42rem' }}
+                  >
+                    <Plus size={12} /> 这笔欠款变大了 — 加钱进去
+                  </button>
+                )}
               </div>
               );
             })}
@@ -762,6 +833,108 @@ export default function AccountsView({ expenses = [] }) {
               这里只管「总共欠多少」和分期表 — <strong>点一行</strong>可以改内容或分期表。
               这个月要还多少、几时还，在「本月」那边填和记，一个地方就够了。
             </p>
+          )}
+
+          {/* 接下来几个月 — the forward view.
+              「我也希望可以看到后几个月的欠款，给我单独看欠款，每个月要还多少」.
+              Folded shut by default: it is the answer to a question you ask
+              occasionally, not a number you need every time you open the tab,
+              and this screen's whole rewrite was about removing repetition. */}
+          {debts.length > 0 && (
+            <div style={{ marginTop: '14px' }}>
+              <button
+                type="button"
+                onClick={() => setShowOutlook(v => !v)}
+                className="btn-secondary"
+                style={{ width: '100%', fontSize: '0.74rem', padding: '0.5rem' }}
+              >
+                <Banknote size={13} /> {showOutlook ? '收起还款表' : `接下来 ${outlookMonths} 个月，每个月要还多少`}
+              </button>
+
+              {showOutlook && (
+                <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    {[6, 12].map(n => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setOutlookMonths(n)}
+                        style={{
+                          flex: 1, padding: '5px 0', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                          fontSize: '0.7rem', fontWeight: outlookMonths === n ? '800' : '600',
+                          background: outlookMonths === n ? 'var(--color-accent-red-soft)' : 'var(--bg-input)',
+                          border: `1px solid ${outlookMonths === n ? 'var(--color-accent-red)' : 'var(--border-glass)'}`,
+                          color: outlookMonths === n ? 'var(--color-accent-red)' : 'var(--text-secondary)',
+                        }}
+                      >
+                        {n} 个月
+                      </button>
+                    ))}
+                  </div>
+
+                  {outlook.map(m => (
+                    <div key={m.start} className="glass-card" style={{
+                      padding: '0.7rem 0.85rem',
+                      borderColor: m.current ? 'var(--color-accent-red)' : undefined,
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
+                        <span style={{ fontSize: '0.8rem', fontWeight: '700' }}>
+                          {m.year} 年 {m.month} 月{m.current && ' · 这个月'}
+                        </span>
+                        <span style={{
+                          fontSize: '0.9rem', fontWeight: '800',
+                          color: m.total > 0 ? 'var(--color-accent-red)' : 'var(--text-muted)',
+                        }}>
+                          {money(m.total)}
+                        </span>
+                      </div>
+
+                      {m.rows.length === 0 ? (
+                        <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                          {/* Said out loud rather than left blank: for a flexible
+                              debt the app genuinely does not know, and printing
+                              RM0.00 without saying why would read as "nothing to
+                              pay" when it means "nothing scheduled". */}
+                          没有排到的分期。想还多少那个月再决定。
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          {m.rows.map((r, i) => (
+                            <div key={`${r.debtId}:${r.due ?? i}`} style={{
+                              display: 'flex', justifyContent: 'space-between', gap: '8px',
+                              fontSize: '0.7rem', color: 'var(--text-secondary)',
+                            }}>
+                              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {r.due ? `${Number(r.due.slice(8, 10))} 号` : '随时'} · {r.creditor}
+                                {r.done && <span style={{ color: 'var(--color-money)' }}> ✓ 已还</span>}
+                              </span>
+                              <span style={{ flexShrink: 0, fontWeight: '700' }}>{money(r.amount)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* The 看爽 column, and the reason the table is worth
+                          looking at: instalments alone always look affordable. */}
+                      <div style={{
+                        marginTop: '7px', paddingTop: '6px', borderTop: '1px solid var(--border-glass)',
+                        display: 'flex', justifyContent: 'space-between', fontSize: '0.66rem',
+                        color: 'var(--text-muted)',
+                      }}>
+                        <span>加上固定开销 {money(m.bills)}</span>
+                        <span style={{ fontWeight: '700' }}>那个月总共 {money(m.grandTotal)}</span>
+                      </div>
+                    </div>
+                  ))}
+
+                  <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                    只有<strong>有分期表</strong>的欠款排得出未来的月份 —
+                    「想还多少还多少」那种，要等到那个月你自己决定，app 不会替你排。
+                    固定开销那一行是照现在的设定推的，之后改了会跟着变。
+                  </p>
+                </div>
+              )}
+            </div>
           )}
         </div>
         );
@@ -858,6 +1031,64 @@ export default function AccountsView({ expenses = [] }) {
           <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
             以前的记录一笔都不会被改动 — 只是从现在这一刻开始，用这个数字重新往下扣。
             对不上通常是有几笔忘了记，或是有笔钱不是从这个户口出的。
+          </p>
+        </Modal>
+      )}
+
+      {/* 「这笔欠款变大了」 — one amount, and where to put it. */}
+      {addFor && (
+        <Modal
+          title={`加钱进「${addFor.creditor}」`}
+          onClose={() => { setAddFor(null); setAAmount(''); }}
+          onSubmit={submitAddTo}
+        >
+          <div>
+            <label style={labelStyle}>加了多少 (RM)</label>
+            <input type="number" step="0.01" inputMode="decimal" autoFocus value={aAmount}
+              onChange={e => setAAmount(e.target.value)} placeholder="例：50" style={inputStyle} required />
+            <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '5px', lineHeight: 1.5 }}>
+              填<strong>多出来的那部分</strong>，不是新的总数。
+              {isFixedDebt(addFor)
+                ? ' 一期本来 RM200 变 RM250，就填 50。'
+                : ' 本来欠 RM500 变 RM550，就填 50。'}
+            </p>
+          </div>
+
+          {/* Only a plan has a "where". A flat debt just owes more. */}
+          {isFixedDebt(addFor) && (
+            <div>
+              <label style={labelStyle}>加在哪里?</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '5px' }}>
+                {ADD_MODES.map(m => (
+                  <button
+                    key={m.value}
+                    type="button"
+                    onClick={() => setAMode(m.value)}
+                    style={{
+                      textAlign: 'left', padding: '8px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                      background: aMode === m.value ? 'var(--color-accent-red-soft)' : 'var(--bg-input)',
+                      border: `1px solid ${aMode === m.value ? 'var(--color-accent-red)' : 'var(--border-glass)'}`,
+                      color: aMode === m.value ? 'var(--color-accent-red)' : 'var(--text-secondary)',
+                    }}
+                  >
+                    <div style={{ fontSize: '0.76rem', fontWeight: aMode === m.value ? '800' : '600' }}>{m.label}</div>
+                    <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginTop: '1px' }}>{m.hint}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {isFixedDebt(addFor) && aMode === 'append' && (
+            <div>
+              <label style={labelStyle}>分几期?</label>
+              <input type="number" min="1" step="1" inputMode="numeric" value={aCount}
+                onChange={e => setACount(e.target.value)} style={inputStyle} required />
+            </div>
+          )}
+
+          <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            已经还掉的期数不会被动到，任何一种都一样。
           </p>
         </Modal>
       )}
