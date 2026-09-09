@@ -28,6 +28,9 @@ import { cycleCost } from '../utils/recurring';
 // Header → 备份 → 汇入 instead. See lifemanager-opening-balances.json.
 const OPENING_ACCOUNTS = [];
 
+// A debt's due date is asked as a MONTH — see the 打算几时还清 field below.
+const MONTHS = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+
 const inputStyle = {
   width: '100%',
   padding: '10px 12px',
@@ -905,7 +908,13 @@ export default function AccountsView({ expenses = [] }) {
                               fontSize: '0.7rem', color: 'var(--text-secondary)',
                             }}>
                               <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {r.due ? `${Number(r.due.slice(8, 10))} 号` : '随时'} · {r.creditor}
+                                {/* Only a scheduled instalment has a day worth
+                                    printing — someone else set it. A flat debt's
+                                    date is stored as the 1st purely to place it
+                                    in a month, so printing 「1 号」 would invent
+                                    a deadline he never picked. */}
+                                {r.fixed && r.due ? `${Number(r.due.slice(8, 10))} 号 · ` : !r.due ? '随时 · ' : ''}
+                                {r.creditor}
                                 {r.done && <span style={{ color: 'var(--color-money)' }}> ✓ 已还</span>}
                               </span>
                               <span style={{ flexShrink: 0, fontWeight: '700' }}>{money(r.amount)}</span>
@@ -1226,10 +1235,47 @@ export default function AccountsView({ expenses = [] }) {
             </select>
           </div>
 
+          {/* A MONTH, not a day.
+              His words, 2026-09-09: 「对于我来说日期没用是月份重要…我很多会早
+              或者迟」. He pays when he pays; what he actually decides is WHICH
+              MONTH he means to clear it. Asking for a day made him pick one at
+              random and then made the app act as if it were a deadline.
+              Stored as the 1st of that month, so every isInCycle() reader keeps
+              working and an old day-level date still resolves to its month. */}
           {dShape === 'flat' && (
             <div>
-              <label style={labelStyle}>到期日（选填）</label>
-              <input type="date" value={dDue} onChange={e => setDDue(e.target.value)} style={inputStyle} />
+              <label style={labelStyle}>打算几时还清?（选填）</label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <select
+                  value={dDue ? dDue.slice(0, 4) : ''}
+                  onChange={e => setDDue(e.target.value
+                    ? `${e.target.value}-${(dDue ? dDue.slice(5, 7) : String(new Date().getMonth() + 1).padStart(2, '0'))}-01`
+                    : '')}
+                  style={{ ...inputStyle, flex: 1 }}
+                >
+                  <option value="">还没决定</option>
+                  {Array.from({ length: 4 }, (_, i) => new Date().getFullYear() + i).map(y => (
+                    <option key={y} value={y}>{y} 年</option>
+                  ))}
+                </select>
+                <select
+                  value={dDue ? dDue.slice(5, 7) : ''}
+                  onChange={e => setDDue(e.target.value
+                    ? `${(dDue ? dDue.slice(0, 4) : String(new Date().getFullYear()))}-${e.target.value}-01`
+                    : '')}
+                  disabled={!dDue}
+                  style={{ ...inputStyle, flex: 1, opacity: dDue ? 1 : 0.45 }}
+                >
+                  <option value="">—</option>
+                  {MONTHS.map((m, i) => (
+                    <option key={m} value={String(i + 1).padStart(2, '0')}>{m}</option>
+                  ))}
+                </select>
+              </div>
+              <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '5px', lineHeight: 1.5 }}>
+                选了月份，那个月它就会出现在「这个月还债」和还款表里，金额先填整笔 —— 你还是可以改。
+                <strong>不选也可以</strong>，那它就一直等你自己决定。
+              </p>
             </div>
           )}
 

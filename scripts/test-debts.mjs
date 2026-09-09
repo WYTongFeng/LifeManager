@@ -18,7 +18,7 @@ import {
   totalRepaidInCycle, REPAYMENT_CATEGORY,
   buildSchedule, buildInstalments, rebuildSchedule, setInstalmentAmount,
   removeInstalment, scheduleSummary, commitmentOf, scheduledForCycle, hasCyclePlan,
-  isDebtSkippedInCycle, setDebtCycleSkip, instalmentDueInCycle, addToDebt,
+  isDebtSkippedInCycle, setDebtCycleSkip, instalmentDueInCycle, dueInCycle, addToDebt,
   repaymentOutlook,
 } from '../src/utils/debts.js';
 import { getCycle, computeCycleBudget, grossSpentByDayIndex } from '../src/utils/cycle.js';
@@ -413,6 +413,41 @@ check('...including the flexible one, because that month it IS decided',
 check('a debt ticked off this month drops out of the table too',
   repaymentOutlook(setDebtCycleSkip([spaylater], 1, cycle.start, true), [], cycle, 2, (d) => getCycle(d))[0].rows.length,
   0);
+
+// --- 「10 月一次还清」 -------------------------------------------------------
+// A flat debt's `dueDate` was read by exactly one label and nothing else — no
+// screen ever placed the debt in that month. 「我明明放10月一次还清，他却没出现」.
+// Setting a month IS the decision, so that month it suggests the whole
+// outstanding, exactly as a schedule does for the other kind.
+const octDebt = { id: 3, creditor: '阿华', amount: 800, dueDate: '2026-10-01' };
+const octCycle = getCycle(new Date(2026, 9, 20));
+
+check('no due month means it still claims nothing, in any month',
+  [plannedForCycle(ahMeng, cycle), plannedForCycle(ahMeng, octCycle)], [0, 0]);
+near('the month he named suggests the whole thing', plannedForCycle(octDebt, octCycle), 800);
+check('...and every other month is untouched',
+  [plannedForCycle(octDebt, cycle), plannedForCycle(octDebt, getCycle(new Date(2026, 10, 20)))], [0, 0]);
+near('...net of anything already repaid on it',
+  plannedForCycle(octDebt, octCycle, [repayment(3, 300, '2026-09-20')]), 500);
+check('typing over it still wins',
+  plannedForCycle(setCyclePlan([octDebt], 3, octCycle.start, 200)[0], octCycle), 200);
+check('...and 0 still means "not this month"',
+  plannedForCycle(setCyclePlan([octDebt], 3, octCycle.start, 0)[0], octCycle), 0);
+
+check('it now has a due date this cycle, like a scheduled debt does',
+  dueInCycle(octDebt, octCycle), '2026-10-01');
+check('...and none in a cycle it does not belong to', dueInCycle(octDebt, cycle), null);
+check('a flat debt with no date never has one', dueInCycle(ahMeng, octCycle), null);
+check('a scheduled debt still answers with its own instalment',
+  dueInCycle(spaylater, cycle), '2026-08-15');
+
+// The forward table is where he actually went looking for it.
+const withOct = repaymentOutlook([ahMeng, octDebt], [], cycle, 4, (d) => getCycle(d));
+check('the months ahead show it under October, and only October',
+  withOct.map(m => m.rows.map(r => r.creditor)), [[], [], ['阿华'], []]);
+near('...for the full outstanding', withOct[2].total, 800);
+check('...while the dateless flat debt still claims no future month',
+  withOct.every(m => m.rows.every(r => r.creditor !== '阿明')), true);
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : fail + ' FAILED'}  (${pass} passed)`);
 if (fail > 0) process.exit(1);

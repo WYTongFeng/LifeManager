@@ -120,7 +120,7 @@ export function originalTotal(debt) {
  */
 export function remainingPlanThisCycle(debt, expenses = [], cycle) {
   const owed = outstandingFor(debt, expenses);
-  const short = plannedForCycle(debt, cycle) - repaidInCycle(debt, expenses, cycle);
+  const short = plannedForCycle(debt, cycle, expenses) - repaidInCycle(debt, expenses, cycle);
   return Math.max(0, Math.min(owed, short));
 }
 
@@ -129,8 +129,27 @@ export function remainingPlanThisCycle(debt, expenses = [], cycle) {
  * ever a suggestion. Zero for a debt with no schedule, which has nothing to
  * suggest from.
  */
-export function scheduledForCycle(debt, cycle) {
-  if (!cycle || !isFixedDebt(debt)) return 0;
+export function scheduledForCycle(debt, cycle, expenses = []) {
+  if (!cycle) return 0;
+
+  // A FLAT DEBT WITH A DUE MONTH IS A DECISION, and it was being thrown away.
+  //
+  // 「一次过 / 想还多少还多少」 debts carry an optional `dueDate`, and until now
+  // literally nothing read it except one label. Nothing put the debt into that
+  // month — not this cycle's plan, not the forward table, not 本期扣款日. The
+  // user, 2026-09-09: 「我明明放10月一次还清，他却没出现」. He was right, and it
+  // was never going to appear, in any month, ever.
+  //
+  // Setting a due month on a flat debt is him saying "I mean to clear this
+  // then", so that month it suggests the whole outstanding — exactly what a
+  // schedule does for the other kind. He can still type over it, and 0 still
+  // means "not this month".
+  if (!isFixedDebt(debt)) {
+    const due = debt?.dueDate;
+    if (!due || !isInCycle(String(due), cycle)) return 0;
+    return outstandingFor(debt, expenses);
+  }
+
   return sumBy(
     debt.schedule.filter(i => !i.paid && isInCycle(String(i.due), cycle)),
     i => num(i.amount)
@@ -199,7 +218,7 @@ export function setDebtCycleSkip(debts = [], debtId, cycleStart, skip) {
  * is `!= null` rather than truthiness: falling through to the schedule there
  * would quietly overrule the one case where saying zero matters.
  */
-export function plannedForCycle(debt, cycle) {
+export function plannedForCycle(debt, cycle, expenses = []) {
   if (!cycle) return 0;
   // Ticked off for this cycle. Outranks both the box and the schedule — see
   // isDebtSkippedInCycle. Deliberately NOT applied to `scheduledForCycle`,
@@ -208,7 +227,7 @@ export function plannedForCycle(debt, cycle) {
   if (isDebtSkippedInCycle(debt, cycle)) return 0;
   const chosen = debt?.plan?.[cycle.start];
   if (chosen != null) return num(chosen);
-  return scheduledForCycle(debt, cycle);
+  return scheduledForCycle(debt, cycle, expenses);
 }
 
 /**
@@ -221,7 +240,7 @@ export function plannedForCycle(debt, cycle) {
  * allowance built on money that is already gone.
  */
 export function reservedForCycle(debt, expenses = [], cycle) {
-  return Math.max(plannedForCycle(debt, cycle), repaidInCycle(debt, expenses, cycle));
+  return Math.max(plannedForCycle(debt, cycle, expenses), repaidInCycle(debt, expenses, cycle));
 }
 
 /**
@@ -283,7 +302,7 @@ export function makeRepayment({ debt, amount, accountId = null, accountName = nu
  */
 export function debtsForCycle(debts = [], expenses = [], cycle) {
   return debts.map(debt => {
-    const planned = plannedForCycle(debt, cycle);
+    const planned = plannedForCycle(debt, cycle, expenses);
     const repaid = repaidInCycle(debt, expenses, cycle);
     const outstanding = outstandingFor(debt, expenses);
     const original = originalTotal(debt);
@@ -295,7 +314,7 @@ export function debtsForCycle(debts = [], expenses = [], cycle) {
       // user's own answer or just that table showing through. The screen prints
       // both — a suggestion that disappears the moment you override it leaves
       // you with no way to check what you overrode.
-      suggested: scheduledForCycle(debt, cycle),
+      suggested: scheduledForCycle(debt, cycle, expenses),
       chosen: hasCyclePlan(debt, cycle),
       repaid,
       reserved: Math.max(planned, repaid),
@@ -327,6 +346,20 @@ export function instalmentDueInCycle(debt, cycle) {
   return debt.schedule
     .filter(i => !i.paid && isInCycle(String(i.due), cycle))
     .sort((a, b) => String(a.due).localeCompare(String(b.due)))[0] ?? null;
+}
+
+/**
+ * The date this debt wants money in this cycle, either kind, or null.
+ *
+ * A flat debt's `dueDate` counts here for the same reason it counts in
+ * `scheduledForCycle`: 「一次还清，10 月」 is a date he set, and every screen
+ * that asks "what is due this month" was ignoring it.
+ */
+export function dueInCycle(debt, cycle) {
+  if (!cycle) return null;
+  if (isFixedDebt(debt)) return instalmentDueInCycle(debt, cycle)?.due ?? null;
+  const due = debt?.dueDate;
+  return due && isInCycle(String(due), cycle) ? String(due) : null;
 }
 
 // --- growing a debt ---------------------------------------------------------
@@ -475,7 +508,7 @@ export function repaymentOutlook(debts = [], expenses = [], cycle, months = 12, 
       if (isDebtSkippedInCycle(debt, c)) continue;
 
       if (current) {
-        const planned = plannedForCycle(debt, c);
+        const planned = plannedForCycle(debt, c, expenses);
         const repaid = repaidInCycle(debt, expenses, c);
         const amount = Math.max(planned, repaid);
         if (amount <= 0) continue;
@@ -483,7 +516,7 @@ export function repaymentOutlook(debts = [], expenses = [], cycle, months = 12, 
           debtId: debt.id,
           creditor: debt.creditor ?? '欠款',
           amount,
-          due: instalmentDueInCycle(debt, c)?.due ?? null,
+          due: dueInCycle(debt, c),
           fixed: isFixedDebt(debt),
           repaid,
           done: repaid >= amount - 0.005,
@@ -491,7 +524,28 @@ export function repaymentOutlook(debts = [], expenses = [], cycle, months = 12, 
         continue;
       }
 
-      if (!isFixedDebt(debt)) continue;
+      // A flat debt CAN claim a future month, but only when he named one.
+      // Without a due month it still claims nothing — that part was right, and
+      // is why this was so easy to miss: the rule "flexible debts have no
+      // future" was true of every flat debt that had no date, which is most of
+      // them, so the ones that DID have a date looked like the same case.
+      if (!isFixedDebt(debt)) {
+        const due = dueInCycle(debt, c);
+        if (!due) continue;
+        const amount = outstandingFor(debt, expenses);
+        if (amount <= 0) continue;
+        rows.push({
+          debtId: debt.id,
+          creditor: debt.creditor ?? '欠款',
+          amount,
+          due,
+          fixed: false,
+          repaid: 0,
+          done: false,
+        });
+        continue;
+      }
+
       const dueRows = debt.schedule.filter(i => !i.paid && isInCycle(String(i.due), c));
       for (const i of dueRows) {
         rows.push({

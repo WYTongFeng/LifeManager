@@ -15,7 +15,7 @@ import {
 } from '../utils/recurring';
 import { nextInstalment } from '../utils/networth';
 import {
-  debtsForCycle, setCyclePlan, makeRepayment, setDebtCycleSkip, instalmentDueInCycle,
+  debtsForCycle, setCyclePlan, makeRepayment, setDebtCycleSkip, dueInCycle,
 } from '../utils/debts';
 import { resolveAccounts, defaultAccount, accountById, isRealSpend } from '../utils/accounts';
 import { AccountSelect, AccountChip } from './AccountPicker';
@@ -136,11 +136,12 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
       // Pre-resolved so computeCycleBudget doesn't have to know that a debt
       // isn't a recurring bill — see cycle.js.
       budgeted: r.reserved, charged: r.reserved,
-      // THIS cycle's instalment, not the next one ever. `nextInstalment` skips
-      // paid rows and keeps walking forward, so on a plan already settled for
-      // this month it returned NEXT month's — and 本期扣款日 printed a December
-      // date under the heading 「本期」. See instalmentDueInCycle in debts.js.
-      due: instalmentDueInCycle(r.debt, cycle)?.due ?? null,
+      // THIS cycle's date, either kind of debt. `nextInstalment` skips paid
+      // rows and keeps walking forward, so on a plan already settled for this
+      // month it returned NEXT month's — and 本期扣款日 printed a December date
+      // under the heading 「本期」. And a flat debt set to 「10 月一次还清」 had
+      // a date nothing anywhere read. See dueInCycle in debts.js.
+      due: dueInCycle(r.debt, cycle),
       accountId: r.debt.accountId ?? null,
       estimated: false, auto: true,
       // "Paid" here is derived from real repayments, not a checkbox — the
@@ -875,7 +876,12 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '0.7rem' }}>
             <CalendarClock size={17} color="var(--color-diet)" />
-            <h3 style={{ fontSize: '1rem', fontWeight: '700' }}>本期扣款日 Upcoming</h3>
+            {/* Was 「本期扣款日」, laid out as a calendar strip with a big day
+                number leading every row. His words, 2026-09-09: 「其实只需要月份
+                就好…很多日期只是写来就是记录罢了…我很多会早或者迟，对于我来说
+                日期没用是月份重要」. So the heading names the month, the item
+                leads the row, and the day survives as a note. */}
+            <h3 style={{ fontSize: '1rem', fontWeight: '700' }}>这个月要给出去的</h3>
           </div>
           {upcomingPayments.length > 0 && (
           <div className="glass-card" style={{ padding: '0.6rem 0.75rem' }}>
@@ -892,22 +898,8 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                     borderTop: i === 0 ? 'none' : '1px solid var(--border-glass)',
                     opacity: passed ? 0.45 : 1,
                   }}>
-                    <div style={{
-                      flexShrink: 0, width: '38px', textAlign: 'center',
-                      borderRadius: 'var(--radius-sm)', padding: '3px 0',
-                      background: isToday ? 'var(--color-accent-red-soft)' : 'var(--bg-input)',
-                      border: `1px solid ${isToday ? 'var(--color-accent-red)' : 'var(--border-glass)'}`,
-                    }}>
-                      <div style={{
-                        fontSize: '0.82rem', fontWeight: '800', lineHeight: 1.1,
-                        color: isToday ? 'var(--color-accent-red)' : 'var(--text-primary)',
-                      }}>
-                        {day}
-                      </div>
-                      <div style={{ fontSize: '0.52rem', color: 'var(--text-muted)' }}>{month}月</div>
-                    </div>
                     <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: '0.8rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: '0.82rem', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                         {u.label}
                         {u.kind === 'debt' && (
                           <span style={{ fontSize: '0.56rem', fontWeight: '800', color: 'var(--color-accent-red)' }}>分期</span>
@@ -916,8 +908,18 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                           <span style={{ fontSize: '0.56rem', fontWeight: '800', color: 'var(--color-diet)' }}>预估</span>
                         )}
                       </div>
-                      <div style={{ marginTop: '2px' }}>
+                      <div style={{ marginTop: '3px', display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
                         <AccountChip accounts={accounts} accountId={u.accountId} size="xs" />
+                        {/* The date, kept as a record rather than a deadline —
+                            he is often early or late and says so. 今天 is still
+                            called out, because that one IS worth noticing. */}
+                        <span style={{
+                          fontSize: '0.63rem',
+                          color: isToday ? 'var(--color-accent-red)' : 'var(--text-muted)',
+                          fontWeight: isToday ? '800' : '400',
+                        }}>
+                          {isToday ? '今天' : passed ? `${month}月${day}号 · 已经过了` : `${month}月${day}号`}
+                        </span>
                       </div>
                     </div>
                     <span style={{
