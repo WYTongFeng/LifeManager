@@ -5,7 +5,7 @@ import {
   Info, ArrowDownLeft, Wallet, HelpCircle, ArrowRightLeft, Copy, Archive,
 } from '../utils/icons';
 import confetti from 'canvas-confetti';
-import { usePersistentState, useLiveJSON, saveJSON } from '../utils/storage';
+import { usePersistentState, useLiveJSON, saveJSON, useToday } from '../utils/storage';
 import { num, sumBy, newId } from '../utils/num';
 import { nowTimeStr, toHHMM, shiftDate, describeDate, sortByTime } from '../utils/datetime';
 import {
@@ -34,6 +34,7 @@ import {
 import { isNativeAvailable } from '../utils/tngNative';
 import { getCycle } from '../utils/cycle';
 import { setCycleActual } from '../utils/recurring';
+import { tabsForCycle, contributors, outgoings } from '../utils/shareTabs';
 
 const inputStyle = {
   width: '100%',
@@ -116,6 +117,9 @@ export default function MoneyModule({
   // would drift. See storage.js.
   const incomeSources = useLiveJSON('incomeSources', []);
   const allocations = useLiveJSON('allocations', []);
+  // 共摊本 — the names only; the records are ordinary expenses carrying
+  // `shareTabId`. See shareTabs.js.
+  const shareTabs = useLiveJSON('shareTabs', []);
   // No screen-wide `cycle` here on purpose. The one thing this file does with
   // cycles — stamping a bill payment onto the right month — has to use the
   // cycle the PAYMENT falls in, not today's, or a payment filed late at the
@@ -205,6 +209,11 @@ export default function MoneyModule({
   // WHICH FIXED BILL this payment is. Without it a logged rent payment was
   // charged twice: once as the allocation's reservation, once as spending.
   const [formAllocationId, setFormAllocationId] = useState('');
+  // Which 共摊本 this record belongs to, if any. Available on ALL three
+  // directions on purpose: the bills go out of the tab and the housemates'
+  // money comes into it, and both have to be able to say so.
+  const [formShareTabId, setFormShareTabId] = useState('');
+  const [formNewShareTab, setFormNewShareTab] = useState('');
 
   // Moving money between your own accounts. Deliberately a separate action from
   // "add expense": it isn't spending, and the one thing it must never do is
@@ -223,6 +232,18 @@ export default function MoneyModule({
   const openProjects = useMemo(() => getOpenProjects(allExpenses ?? expenses), [allExpenses, expenses]);
   const closedProjects = useMemo(() => getClosedProjects(allExpenses ?? expenses), [allExpenses, expenses]);
   const archivedProjects = useMemo(() => getArchivedProjects(allExpenses ?? expenses), [allExpenses, expenses]);
+
+  // A 共摊本 is a per-CYCLE figure, so this screen needs the cycle even though
+  // everything else on it is scoped to a single day. Keyed on the live date for
+  // the reason useToday exists — the app stays open for days. See storage.js.
+  const liveToday = useToday();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const moneyCycle = useMemo(() => getCycle(), [liveToday]);
+  const shareCycles = useMemo(
+    () => tabsForCycle(shareTabs, allExpenses ?? expenses, moneyCycle)
+      .filter(t => t.rows.length > 0),
+    [shareTabs, allExpenses, expenses, moneyCycle]
+  );
   const projectsById = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
   // What each expense actually cost THIS user — a closed project counts only
   // the share nobody paid back. Built once here rather than per row.
@@ -475,6 +496,8 @@ export default function MoneyModule({
     setFormNewSource('');
     setFormInKind('mine');
     setFormAllocationId('');
+    setFormShareTabId('');
+    setFormNewShareTab('');
   };
 
   const openAddModal = () => {
@@ -528,6 +551,8 @@ export default function MoneyModule({
       incomeSources.find(s => String(s.id) === String(expense.incomeSourceId))?.kind === 'passthrough'
         ? 'passthrough' : 'mine');
     setFormAllocationId(expense.allocationId != null ? String(expense.allocationId) : '');
+    setFormShareTabId(expense.shareTabId != null ? String(expense.shareTabId) : '');
+    setFormNewShareTab('');
     setShowEntryModal(true);
   };
 
@@ -640,6 +665,18 @@ export default function MoneyModule({
       saveJSON('allocations', nextAllocations);
     }
 
+    // 共摊本. A brand-new one is created inline rather than sending him to
+    // another screen and back — the moment you notice you need a tab is the
+    // moment you are logging the first thing that belongs in it.
+    let shareTabId = formShareTabId || null;
+    if (formShareTabId === '__new' && formNewShareTab.trim()) {
+      const created = { id: newId(), label: formNewShareTab.trim() };
+      saveJSON('shareTabs', [...shareTabs, created]);
+      shareTabId = created.id;
+    } else if (shareTabId === '__new') {
+      shareTabId = null;
+    }
+
     // onSaveExpense, not setExpenses. `setExpenses` can only write today by
     // construction (useTodayRecords in App.jsx), so saving a record dated
     // yesterday through it would either be silently refiled to today or
@@ -658,6 +695,7 @@ export default function MoneyModule({
       isMoneyIn: formMoneyIn,
       incomeSourceId,
       allocationId,
+      shareTabId,
       // Stamped at birth, same as makeTransfer and makeRepayment do. `txType`
       // would derive the same answer from the flags either way — that fallback
       // is permanent — but a record that says what it is beats one that has to
@@ -1210,6 +1248,87 @@ export default function MoneyModule({
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* 共摊本 — the running tab. Deliberately NOT scoped to today, and
+          deliberately shown as ONE net figure with the two gross halves under
+          it: 「结果才算，中间不用算」. A tab with nothing in it this cycle is
+          absent rather than a row of zeros. */}
+      {shareCycles.length > 0 && (
+        <div>
+          <h3 style={{ fontSize: '1rem', fontWeight: '700', marginBottom: '0.75rem' }}>共摊本</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {shareCycles.map(t => {
+              const paidBy = contributors({ id: t.id }, allExpenses ?? expenses, moneyCycle);
+              const bills = outgoings({ id: t.id }, allExpenses ?? expenses, moneyCycle);
+              return (
+                <div key={t.id} className="glass-card" style={{ padding: '0.85rem 1rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
+                    <span style={{ fontSize: '0.88rem', fontWeight: '700' }}>{t.label}</span>
+                    <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
+                      {Number(moneyCycle.start.slice(5, 7))} 月
+                    </span>
+                  </div>
+
+                  {/* The one number. Everything else on this card explains it. */}
+                  <div style={{ marginTop: '8px', display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+                    <span style={{
+                      fontSize: '1.35rem', fontWeight: '800',
+                      color: t.isIncome ? 'var(--color-money)' : 'var(--color-accent-red)',
+                    }}>
+                      {t.isIncome ? '+' : '−'} RM {Math.abs(t.net).toFixed(2)}
+                    </span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                      {t.isIncome ? '这个月收多过付 · 算收入' : '这个月我实际出的'}
+                    </span>
+                  </div>
+
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    付出去 RM {t.paidOut.toFixed(2)} · 收到 RM {t.received.toFixed(2)}
+                  </div>
+
+                  {bills.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '9px' }}>
+                      {bills.map(b => (
+                        <span key={b.id} style={{
+                          fontSize: '0.66rem', padding: '3px 8px', borderRadius: 'var(--radius-sm)',
+                          background: 'var(--bg-input)', border: '1px solid var(--border-glass)',
+                          color: 'var(--text-secondary)',
+                        }}>
+                          {b.merchant} {num(b.amount).toFixed(2)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Who put money in. Reported, never planned — he said he
+                      does not want a list of who owes what. */}
+                  {paidBy.length > 0 ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '6px' }}>
+                      {paidBy.map(c => (
+                        <span key={c.name} style={{
+                          fontSize: '0.66rem', padding: '3px 8px', borderRadius: 'var(--radius-sm)',
+                          background: 'var(--color-money-soft)', border: '1px solid var(--color-money)',
+                          color: 'var(--color-money)',
+                        }}>
+                          {c.name} {c.paid.toFixed(2)}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '6px' }}>
+                      这个月还没有人给钱。
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '9px', lineHeight: 1.5 }}>
+            里面每一笔<strong>单独都不算数</strong>。只有上面那个净额进这个月的帐 ——
+            少的算支出，多的算收入。下个月他们补上，那笔钱就推高下个月的净额，自己补回来。
+          </p>
         </div>
       )}
 
@@ -1995,6 +2114,62 @@ export default function MoneyModule({
                   )}
                 </div>
               )}
+
+              {/* 共摊本. Offered on every direction, because a tab has two
+                  sides: the bills leaving and the housemates' money arriving.
+                  Nothing filed here counts on its own — only the tab's net for
+                  the month reaches the budget. See shareTabs.js. */}
+              <div>
+                <label style={labelStyle}>算进共摊本吗?</label>
+                <select
+                  value={formShareTabId}
+                  onChange={(e) => setFormShareTabId(e.target.value)}
+                  style={inputStyle}
+                >
+                  <option value="">不用，普通一笔</option>
+                  {shareTabs.filter(t => !t.archived).map(t => (
+                    <option key={t.id} value={String(t.id)}>{t.label}</option>
+                  ))}
+                  <option value="__new">+ 开一个新的共摊本…</option>
+                </select>
+
+                {formShareTabId === '__new' && (
+                  <>
+                    <input
+                      type="text"
+                      placeholder="例：房友共摊"
+                      value={formNewShareTab}
+                      onChange={(e) => setFormNewShareTab(e.target.value)}
+                      style={inputStyle}
+                    />
+                    <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '6px' }}>
+                      {['房友共摊', '家里共摊', '旅行共摊'].map(name => (
+                        <button
+                          key={name}
+                          type="button"
+                          onClick={() => setFormNewShareTab(name)}
+                          style={{
+                            padding: '4px 9px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                            fontSize: '0.68rem',
+                            background: formNewShareTab === name ? 'var(--color-money-soft)' : 'var(--bg-input)',
+                            border: `1px solid ${formNewShareTab === name ? 'var(--color-money)' : 'var(--border-glass)'}`,
+                            color: formNewShareTab === name ? 'var(--color-money)' : 'var(--text-secondary)',
+                          }}
+                        >
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {formShareTabId && (
+                  <p style={{ fontSize: '0.68rem', color: 'var(--color-money)', marginTop: '5px', lineHeight: 1.5 }}>
+                    这笔<strong>单独不算数</strong> —— 不算你花的，也不算你的收入。
+                    整本这个月「收到的 − 付出去的」才算：多的算收入，少的算支出。
+                  </p>
+                )}
+              </div>
 
               {/* 项目 (project): marks a fronted expense as one others owe you
                   back on, so later repayments — however many, however late —

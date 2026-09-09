@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Plus, Trash2, Pencil, X, CalendarClock, ArrowDownToLine,
   ArrowUpFromLine, Lock, Check, AlertTriangle, Banknote, Square, CheckSquare,
+  ArrowRightLeft,
 } from '../utils/icons';
 import { useLiveJSON, useToday, saveJSON, loadJSON } from '../utils/storage';
 import { num, newId } from '../utils/num';
@@ -18,6 +19,7 @@ import {
   debtsForCycle, setCyclePlan, makeRepayment, setDebtCycleSkip, dueInCycle,
 } from '../utils/debts';
 import { resolveAccounts, defaultAccount, accountById, isRealSpend } from '../utils/accounts';
+import { tabsForCycle, budgetLinesForCycle } from '../utils/shareTabs';
 import { AccountSelect, AccountChip } from './AccountPicker';
 import ImpulseSandbox from './ImpulseSandbox';
 import SpendPie from './SpendPie';
@@ -68,6 +70,9 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
   // usePersistentState instance that would drift from the other screen's.
   const debts = useLiveJSON('debts', []);
   const setDebts = (next) => saveJSON('debts', next);
+  // 共摊本 — read-only here. This screen shows each tab's net for the cycle and
+  // feeds it to the budget; the tabs themselves are created and filled in 记账.
+  const shareTabs = useLiveJSON('shareTabs', []);
   const rawAccounts = useLiveJSON('accounts', []);
   const accounts = useMemo(() => resolveAccounts(rawAccounts, expenses), [rawAccounts, expenses]);
 
@@ -213,10 +218,21 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
     [autoAllocations]
   );
 
+  // One line per tab that moved this cycle, carrying only its net. Everything
+  // inside a tab is budget-neutral on its own — see shareTabs.js.
+  const shareLines = useMemo(
+    () => budgetLinesForCycle(shareTabs, expenses, cycle),
+    [shareTabs, expenses, cycle]
+  );
+  const shareCycles = useMemo(
+    () => tabsForCycle(shareTabs, expenses, cycle).filter(t => t.rows.length > 0),
+    [shareTabs, expenses, cycle]
+  );
+
   const budget = useMemo(
-    () => computeCycleBudget({ incomeSources, allocations: allAllocations, expenses, cycle }),
+    () => computeCycleBudget({ incomeSources, allocations: allAllocations, expenses, cycle, shareLines }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [incomeSources, manualAllocations, autoAllocations, expenses, cycle]
+    [incomeSources, manualAllocations, autoAllocations, expenses, cycle, shareLines]
   );
 
   // Average pace, for "am I on track" without doing the division in your head.
@@ -982,6 +998,35 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
             </p>
           )}
         </div>
+      )}
+
+      {/* 共摊本 — one net per tab, and it is the only thing about a tab that
+          touches this screen's arithmetic. Sits above 固定月费 because that is
+          where the number it produces ends up: a negative net IS part of
+          固定开销 this cycle, and leaving it unnamed inside that total was the
+          one way this could read as the app inventing a figure. */}
+      {shareCycles.length > 0 && (
+        <Section
+          icon={<ArrowRightLeft size={17} color="var(--color-money)" />}
+          title="共摊本 Shared"
+          empty={false}
+        >
+          {shareCycles.map(t => (
+            <Row
+              key={t.id}
+              title={t.label}
+              subtitle={<>付出去 {money(t.paidOut)} · 收到 {money(t.received)}</>}
+              subtitleColor="var(--text-muted)"
+              amount={`${t.isIncome ? '+' : '−'} ${money(Math.abs(t.net))}`}
+              amountColor={t.isIncome ? 'var(--color-money)' : 'var(--color-accent-red)'}
+            />
+          ))}
+          <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            里面每一笔单独都不算数，只有净额进这个月的帐：
+            <strong>少的算支出</strong>（上面的固定开销里面有它），
+            <strong>多的算收入</strong>。要加东西进去，在「今天」记账时选共摊本。
+          </p>
+        </Section>
       )}
 
       {/* Recurring bills — keep counting every cycle until you remove them.

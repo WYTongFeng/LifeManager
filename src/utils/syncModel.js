@@ -48,6 +48,10 @@ export const META_DOCS = {
   // new key to be registered with sync — this list IS the registration, and
   // it's opt-in by construction. See SCHEMA.md.
   payday: ['incomeSources', 'allocations'],
+  // 共摊本 — just the names (see shareTabs.js). The RECORDS live in `expenses`
+  // and sync there already; this list is a handful of labels, edited on one
+  // device at a time, so pushing it whole is safe.
+  shareTabs: ['shareTabs'],
   impulse: ['pendingRequests'],
   // Body-weight readings over time. Its OWN document rather than a field on
   // `settings`, for two reasons: it is the only value here that grows (capped

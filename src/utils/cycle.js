@@ -153,7 +153,30 @@ export function isEstimated(allocation, cycle) {
  * @param {Array}  args.expenses       all expense records (filtered here by cycle)
  * @param {object} args.cycle          from getCycle()
  */
-export function computeCycleBudget({ incomeSources = [], allocations = [], expenses = [], cycle }) {
+export function computeCycleBudget({
+  incomeSources = [], allocations = [], expenses = [], cycle, shareLines = [],
+}) {
+  // 共摊本 — see shareTabs.js. Every record filed under one is budget-neutral
+  // ON ITS OWN: the RM2,000 rent is not spending, the RM354 a housemate sends
+  // back is not income. Only the tab's NET for this cycle crosses over, and it
+  // arrives here pre-computed in `shareLines` as [{ id, label, net }].
+  //
+  // His rule, and the whole reason this exists: 「多的算收入，少的算支出，就是
+  // 结果才算，中间不用算」.
+  //
+  // The filter has to be applied to every individual total below, not just one
+  // of them — a tabbed record that stayed in 花掉的 while its net also counted
+  // would charge the same ringgit twice, which is the failure this file spends
+  // most of its length avoiding.
+  const inShareTab = (e) => e?.shareTabId != null;
+
+  // The share tabs, folded in once each. A negative net is money he really is
+  // out of pocket for this cycle, so it joins 固定开销; a positive one means the
+  // tab collected more than it spent, which is income. Nothing in between ever
+  // reaches the budget — that is the entire rule.
+  const shareCommitted = shareLines.reduce((t, l) => t + (l.net < 0 ? -l.net : 0), 0);
+  const shareIncome = shareLines.reduce((t, l) => t + (l.net > 0 ? l.net : 0), 0);
+
   const sum = (list, pick = x => x.amount) =>
     list.reduce((total, item) => total + (Number(pick(item)) || 0), 0);
 
@@ -181,7 +204,8 @@ export function computeCycleBudget({ incomeSources = [], allocations = [], expen
   // `Math.max` would have been the tempting rule and is wrong for exactly that
   // case. An arrival linked to no source (a gift, a one-off) counts as itself.
   const arrivals = expenses.filter(e =>
-    e.isMoneyIn && !e.isAccountTransfer && isInCycle(e.date ?? cycle.start, cycle));
+    e.isMoneyIn && !e.isAccountTransfer && !inShareTab(e)
+    && isInCycle(e.date ?? cycle.start, cycle));
   const arrivedBySource = new Map();
   let arrivedUnlinked = 0;
   for (const e of arrivals) {
@@ -208,7 +232,9 @@ export function computeCycleBudget({ incomeSources = [], allocations = [], expen
   // shows it as 「未归类进账」 with a prompt to file it. Naming the gap is the
   // fix; guessing at it is not. The moment it is filed against a source it
   // starts counting, through `resolveSource` above.
-  const spendableIncome = spendableSources.reduce((t, s) => t + resolveSource(s), 0);
+  // A share tab that collected more than it spent is income — his rule, and
+  // the only way a housemate's transfer ever becomes spendable money.
+  const spendableIncome = spendableSources.reduce((t, s) => t + resolveSource(s), 0) + shareIncome;
   const passthrough = passthroughSources.reduce((t, s) => t + resolveSource(s), 0);
 
   // Per-source detail, so the income list can show 预计 vs 实际到账 per line
@@ -290,8 +316,10 @@ export function computeCycleBudget({ incomeSources = [], allocations = [], expen
   const chargedThisCycle = a => Math.max(
     a.charged != null ? a.charged : plannedThisCycle(a),
     paidByAllocation.get(String(a.id)) ?? 0);
-  const committed = sum(allocations, amountThisCycle);
-  const committedCharged = sum(allocations, chargedThisCycle);
+  const committed = sum(allocations, amountThisCycle) + shareCommitted;
+  // Same treatment as `committed`: a tab's net really did leave the accounts
+  // this cycle, so the "what actually goes out" figure has to carry it too.
+  const committedCharged = sum(allocations, chargedThisCycle) + shareCommitted;
   const committedUnpaid = sum(allocations.filter(a => !a.paid), amountThisCycle);
 
   // 进账 (`isMoneyIn`) — money genuinely arriving into an account from outside:
@@ -324,8 +352,11 @@ export function computeCycleBudget({ incomeSources = [], allocations = [], expen
   // existed there was no way to say it, so anyone who logged their rent
   // payment silently lost the amount from their budget twice over.
   const linkedToLiveBill = e => e.allocationId != null && liveAllocationIds.has(String(e.allocationId));
+  // A FOURTH exclusion, and the broadest: anything filed under a 共摊本. Its
+  // whole cycle is represented once, by the tab's net, in `shareCommitted` /
+  // `shareIncome` below. See shareTabs.js.
   const budgetMovement = expensesThisCycle.filter(e =>
-    !e.isMoneyIn && e.repaysDebtId == null && !linkedToLiveBill(e));
+    !e.isMoneyIn && e.repaysDebtId == null && !linkedToLiveBill(e) && !inShareTab(e));
   const spentThisCycle = sum(budgetMovement);
 
   // Two different questions that `spentThisCycle` alone can't answer, because
@@ -339,7 +370,8 @@ export function computeCycleBudget({ incomeSources = [], allocations = [], expen
   // signed total automatically, but gross figures like these would otherwise
   // report a RM100 top-up as RM100 spent AND RM100 received. See makeTransfer
   // in accounts.js.
-  const realMovement = expensesThisCycle.filter(e => !e.isAccountTransfer && !e.isMoneyIn);
+  const realMovement = expensesThisCycle.filter(e =>
+    !e.isAccountTransfer && !e.isMoneyIn && !inShareTab(e));
   const repaymentsThisCycle = realMovement.filter(e => e.repaysDebtId != null);
   // Repayments are real money leaving, so they belong in "where did it all go"
   // — but as their own figure, not folded into 花掉的. Debt is not shopping,
@@ -386,7 +418,11 @@ export function computeCycleBudget({ incomeSources = [], allocations = [], expen
   // Transfers excluded: moving your own RM100 from Maybank to TNG is not income
   // arriving, even though the receiving half is stored exactly like one.
   const arrivedThisCycle = sum(
-    expensesThisCycle.filter(e => e.isMoneyIn && !e.isAccountTransfer),
+    // Tabbed arrivals are excluded here too, for the same reason as everywhere
+    // else: a housemate's RM354 is not money arriving to spend, it is the tab
+    // filling back up. 「实际进账」 would otherwise print a figure the income
+    // list beside it deliberately does not contain.
+    expensesThisCycle.filter(e => e.isMoneyIn && !e.isAccountTransfer && !inShareTab(e)),
     e => Math.abs(Number(e.amount) || 0)
   );
 
@@ -445,6 +481,10 @@ export function computeCycleBudget({ incomeSources = [], allocations = [], expen
     committed,
     committedCharged,
     committedUnpaid,
+    // The share tabs' two halves, reported so the screen can name them instead
+    // of leaving an unexplained lump inside 固定开销.
+    shareCommitted,
+    shareIncome,
     spentThisCycle,
     arrivedThisCycle,
     netThisCycle,
