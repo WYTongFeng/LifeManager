@@ -47,6 +47,47 @@ capture log and reached nothing. It goes to the review queue now — queued, not
 an inflow really can arrive twice and money invented into an account is worse than money missing
 from one.
 
+**Round two, same day, after he answered the design questions.** The per-bill sharing model above
+was wrong and he said so: he collects one lump from five housemates covering rent + TIME wifi +
+Spotify, and splitting it back across three bills to answer 「我实际出了多少」 was work the app was
+asking him to do. His rule instead: 「多的算收入，少的算支出，就是结果才算，中间不用算」.
+
+**共摊本** (`shareTabs.js`) is that rule. A tab is a list of names; records carry `shareTabId` and
+are budget-neutral individually. Per cycle: `净额 = 收到 − 付出去`, income when positive, spending
+when negative. It self-corrects across months — a late payment arrives with no matching bill and
+pushes the next net up. It dissolved three questions that had no good answer (reserve gross or net;
+does the paying account matter; is a housemate's transfer income) and replaced the whole per-bill
+design.
+
+**Months, not days.** 「对于我来说日期没用是月份重要」. A flat debt's `dueDate` was read by exactly
+one label — nothing placed the debt in that month, so 「10月一次还清」 could never appear anywhere.
+The form asks year+month now (stored as the 1st), and 本期扣款日 leads with the item, not a day
+number.
+
+**Three smaller ones:** 固定月费 creatable from the record being logged; PBE's target stamped
+per-cycle (`targets`) since his dad changes it monthly; and a 代管 → 我的 transfer markable as
+income via an explicit `countsAsIncome`, which is the answer to 「有些要算收入，有些不用」.
+
+**A 代管 bill no longer reduces his budget.** PBE's balance is out of `ownCash` and its inflows are
+not income, so subtracting a bill it pays charged him twice — ~RM66/day of allowance that did not
+exist.
+
+**Then he asked for an audit** (「什么bug，逻辑冲突，你可以检查整个财务的」) and it found four totals
+disagreeing with the budget above them, two of them predating this work:
+- 「钱去哪里了」 drew a slice for a claim that no longer existed (代管 bill) and none for one that
+  did (a tab's net), so the circle stopped summing to income.
+- `grossSpentByDayIndex` excluded transfers and repayments by hand but not bill payments, while the
+  figure it is compared against uses `isRealSpend` — so a month whose rent was logged read as a
+  spending spike. **Pre-existing.**
+- 花掉的 excluded transfers by *arithmetic* (the pair nets to zero), which broke the moment one half
+  could be income: RM500 moved between his own accounts read as RM500 spent.
+- The day list and the AI export each told the reader the wrong reason a record did not count.
+
+The lesson, and it is the one this module keeps teaching: the exclusion belongs in the CLASSIFIER
+(`isDailySpend` / `isRealSpend` in accounts.js), not in each call site. Five screens filter on those
+two predicates — 今天花了多少, the Dashboard, 本周回顾, and the midnight rollover that writes a day
+into `history` permanently — and none of them will ever hear about a new kind of record.
+
 Still open, and blocked on his data rather than on code: the RM2,000 rent figure he described was
 never diagnosed, because reading it needs a 备份 → 导出文字档 he has not sent yet.
 
