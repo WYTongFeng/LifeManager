@@ -161,9 +161,15 @@ function dailyLog(expenses, { today = todayStr() } = {}) {
       // Sign carries meaning that the amount alone cannot: a negative record is
       // a refund, an arrival, or half a transfer, and those are three different
       // things. Spelled out rather than left to the reader.
-      const kind = isTransferRecord(e) ? (amount > 0 ? '转出' : '转入')
+      // 共摊 is checked FIRST because it changes what every other label would
+      // mean to a reader: a tabbed record is real money that moved, but it is
+      // counted once as the tab's monthly net, so calling it 支出 or 进账 here
+      // would contradict the totals further up this same report.
+      const kind = e.shareTabId != null ? (amount > 0 ? '共摊·付' : '共摊·收')
+        : isTransferRecord(e) ? (amount > 0 ? '转出' : '转入')
         : e.isMoneyIn ? '进账'
         : e.repaysDebtId != null ? '还债'
+        : e.allocationId != null ? '固定月费'
         : amount < 0 ? '退款/别人还我'
         : '支出';
       const parts = [
@@ -185,6 +191,10 @@ function categoryTotals(expenses) {
   const totals = new Map();
   for (const e of expenses.filter(isSpendingRecord)) {
     if (num(e.amount) <= 0) continue;
+    // A tabbed bill is not a category of his spending — it is part of a net
+    // that is reported separately. Leaving it in made 房租 the biggest slice of
+    // a breakdown whose own totals excluded it.
+    if (e.shareTabId != null) continue;
     const key = categoryLabel(e.category, 'expense');
     totals.set(key, (totals.get(key) ?? 0) + num(e.amount));
   }

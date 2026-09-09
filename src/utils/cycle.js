@@ -105,11 +105,17 @@ export function grossSpentByDayIndex(expenses, cycle, dayIndex) {
   cutoff.setDate(cutoff.getDate() + dayIndex);
   const cutoffYmd = ymd(cutoff);
   return expenses
-    .filter(e => !e.isAccountTransfer
-      // Repayments excluded to keep this comparable with grossSpentThisCycle,
-      // which excludes them too. A month where a debt was cleared would
-      // otherwise read as a catastrophic overspend against the month before.
-      && e.repaysDebtId == null
+    // `isRealSpend`, not a filter written here. This has to match
+    // `grossSpentThisCycle` exactly or the comparison it feeds — this month
+    // against last month at the same day — is measuring two different things
+    // and calling the difference a trend.
+    //
+    // It did not match. Transfers and repayments were ruled out by hand, but
+    // BILL PAYMENTS were not, so a month whose rent happened to be logged
+    // showed as a spending spike against one that was not, purely from how the
+    // rent was recorded. 共摊本 records would have joined them. The classifier
+    // knows about all of these, and about whatever kind of record comes next.
+    .filter(e => isRealSpend(e)
       && isInCycle(e.date ?? cycle.start, cycle)
       && (e.date ?? cycle.start) <= cutoffYmd
       && Number(e.amount) > 0)

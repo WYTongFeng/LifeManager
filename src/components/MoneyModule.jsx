@@ -432,6 +432,14 @@ export default function MoneyModule({
   // Transfers are pulled out of both lists: a +RM100 leaving Maybank is not a
   // purchase and the matching -RM100 arriving in TNG is not income. They get
   // their own section below so the movement is still visible.
+  // Naming a record's 共摊本 on the row. Without it the two lists below read
+  // wrongly: 「固定开销 · 还款」 tells you the money was counted as a bill or a
+  // repayment, and 「收到的款项」 looks like spendable money arriving. Neither
+  // is true of a tabbed record — it is counted once, inside the tab's net.
+  const shareTabName = (item) => (item?.shareTabId == null
+    ? null
+    : shareTabs.find(t => String(t.id) === String(item.shareTabId))?.label ?? '共摊本');
+
   const transferEntries = daySorted.filter(isTransferRecord);
   const realExpenses = daySorted.filter(item => !isTransferRecord(item));
   // 「今天买了什么」 — purchases only. A rent payment or a debt repayment is
@@ -1745,7 +1753,7 @@ export default function MoneyModule({
         <div>
           <h3 style={{ fontSize: '1rem', fontWeight: '700', marginBottom: '0.35rem' }}>固定开销 · 还款</h3>
           <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: '0.7rem', lineHeight: 1.5 }}>
-            这些是真的付出去了，但不算「消费」 — 本月那边已经当成固定开销/还债算过一次。
+            这些是真的付出去了，但不算「消费」 — 本月那边已经当成固定开销 / 还债 / 共摊本算过一次。
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {committedEntries.map((item) => {
@@ -1764,7 +1772,7 @@ export default function MoneyModule({
                         fontSize: '0.55rem', fontWeight: '800', padding: '1px 5px',
                         borderRadius: 'var(--radius-sm)', border: `1px solid ${meta.color}`, color: meta.color,
                       }}>
-                        {meta.label}
+                        {shareTabName(item) ?? meta.label}
                       </span>
                     </div>
                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '3px', flexWrap: 'wrap' }}>
@@ -1848,6 +1856,12 @@ export default function MoneyModule({
                       <span>{item.time}</span>
                       {item.repaysExpenseId != null && projectsById.get(item.repaysExpenseId) && (
                         <span style={{ color: 'var(--color-money)' }}>• 还「{projectsById.get(item.repaysExpenseId).merchant}」的钱</span>
+                      )}
+                      {/* Without this the row reads as spendable money arriving,
+                          which is the one thing it is not — it is the tab
+                          filling back up, and only the tab's net counts. */}
+                      {shareTabName(item) && (
+                        <span style={{ color: 'var(--color-money)' }}>• 进「{shareTabName(item)}」，不算收入</span>
                       )}
                     </div>
                   </div>

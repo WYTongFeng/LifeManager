@@ -321,7 +321,12 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
   // nothing; with it, a slice is a share of the money that actually existed.
   const moneyFlow = useMemo(() => {
     const slices = [
-      ...manualAllocations.map(a => ({
+      // A 代管 bill is deliberately absent: it is not a claim on his income
+      // (computeCycleBudget leaves it out of `committed`), so a slice for it
+      // would not be paid for by anything else in this circle — and the 还没花
+      // slice, which is income minus every claim, would be short by its value.
+      // The circle has to be built from the same claims the budget was.
+      ...manualAllocations.filter(a => !a.custodial).map(a => ({
         key: `alloc:${a.id}`,
         label: a.label,
         // `budgeted`, not `charged`: this is what the cycle set aside, which is
@@ -330,6 +335,15 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
         value: num(a.budgeted),
       })),
       ...autoAllocations.map(a => ({ key: a.id, label: a.label, value: num(a.amount) })),
+      // ...and a 共摊本 that came out negative IS such a claim — it is inside
+      // `committed` — so it needs a slice of its own or the circle silently
+      // under-reports by the amount he actually paid for the shared bills.
+      // A positive net is income, not a claim, and belongs nowhere in here.
+      ...shareCycles.filter(t => t.isSpend).map(t => ({
+        key: `share:${t.id}`,
+        label: t.label,
+        value: t.ownShare,
+      })),
       ...cycleCategoryBreakdown.map(c => ({
         key: `cat:${c.category}`,
         // The category's own name, in Chinese, resolved through the same table
@@ -356,7 +370,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
       slices.push({ key: '__left', label: '还没花', value: budget.available, muted: true });
     }
     return slices;
-  }, [manualAllocations, autoAllocations, cycleCategoryBreakdown, budget.available,
+  }, [manualAllocations, autoAllocations, shareCycles, cycleCategoryBreakdown, budget.available,
     cycle.start, todayStr, categoryPrefs, cycleOwnSpendMap]);
 
   // --- debt: this cycle's plan, and logging a repayment ---------------------

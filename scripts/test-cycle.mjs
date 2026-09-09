@@ -355,6 +355,20 @@ const bothHalves = incBudget([
 check('...and its other half is not left behind as spending',
   [bothHalves.spentThisCycle, bothHalves.grossSpentThisCycle], [0, 0]);
 
+// --- the vs-last-cycle comparison has to measure the same thing both sides --
+// It ruled out transfers and repayments by hand but not bill payments, so a
+// month whose rent happened to be logged read as a spending spike against one
+// where it was not — a difference in bookkeeping reported as a trend.
+const mixedDay = [
+  { date: '2026-08-03', amount: 40 },                                  // a purchase
+  { date: '2026-08-03', amount: 500, allocationId: 'a1', type: 'bill' }, // rent
+  { date: '2026-08-03', amount: 200, repaysDebtId: 'd1' },              // a repayment
+  { date: '2026-08-03', amount: 300, isAccountTransfer: true },         // a transfer
+  { date: '2026-08-03', amount: 99, shareTabId: 'rt' },                 // a shared bill
+];
+check('only the purchase counts, on both sides of the comparison',
+  grossSpentByDayIndex(mixedDay, cycle, 5), 40);
+
 check('moving your own money between accounts is not income arriving',
   transferIn.spendableIncome, 1000);
 
