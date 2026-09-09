@@ -151,6 +151,12 @@ export default function AccountsView({ expenses = [] }) {
   // modal opened), so toggling an instalment's paid state below updates this
   // modal's own schedule list immediately instead of showing stale data.
   const editingDebt = editingId ? debts.find(d => d.id === editingId) : null;
+  // Re-derived from the live list rather than captured when the modal opened,
+  // same reason as editingDebt: the target history has to show what is actually
+  // stored, including a figure written moments ago on another screen.
+  const editingAccount = accountModal && editingId
+    ? accounts.find(a => sameId(a.id, editingId)) ?? null
+    : null;
 
   // Every outstanding obligation — real debts plus what a custodial account is
   // short of its target — smallest first.
@@ -217,10 +223,22 @@ export default function AccountsView({ expenses = [] }) {
     const balance = Number(fBalance);
     if (!fName.trim() || !Number.isFinite(balance)) return;
     const target = fTarget.trim() === '' ? null : Number(fTarget);
+    const resolvedTarget = Number.isFinite(target) ? target : null;
+    // The target is stamped against THIS cycle as well as stored as the current
+    // one. His dad changes the figure every month and a single field threw the
+    // previous month away each time — 「那个我每个月都会改」. `target` stays the
+    // live value every shortfall calculation reads, so nothing downstream
+    // changed; `targets` is the record of what was asked for when.
+    const existing = editingId ? accounts.find(a => sameId(a.id, editingId)) : null;
+    const targets = { ...(existing?.targets ?? {}) };
+    if (resolvedTarget == null) delete targets[cycle.start];
+    else targets[cycle.start] = resolvedTarget;
+
     const payload = {
       name: fName.trim(),
       type: fType,
-      target: Number.isFinite(target) ? target : null,
+      target: resolvedTarget,
+      targets,
       kind: fKind,
       countsToNetWorth: fCounts,
       autoShortfallDebt: fAutoShortfall,
@@ -1000,9 +1018,27 @@ export default function AccountsView({ expenses = [] }) {
           )}
 
           <div>
-            <label style={labelStyle}>目标金额 (RM，选填)</label>
+            <label style={labelStyle}>
+              目标金额 (RM，选填)
+              {fKind === 'custodial' && <span style={{ color: 'var(--text-muted)' }}> · 记成 {cycle.start.slice(0, 7)} 的</span>}
+            </label>
             <input type="number" step="0.01" inputMode="decimal" value={fTarget}
               onChange={e => setFTarget(e.target.value)} placeholder="要存到多少 / 要补回多少" style={inputStyle} />
+            {/* The months already on record. Nothing computes with them — the
+                live `target` does that — but a figure someone else sets and
+                changes monthly is worth being able to look back at. */}
+            {(() => {
+              const past = Object.entries(editingAccount?.targets ?? {})
+                .filter(([k]) => k !== cycle.start)
+                .sort((a, b) => b[0].localeCompare(a[0]))
+                .slice(0, 6);
+              if (past.length === 0) return null;
+              return (
+                <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '5px', lineHeight: 1.6 }}>
+                  以前几个月：{past.map(([k, v]) => `${k.slice(0, 7)} ${money(v)}`).join(' · ')}
+                </p>
+              );
+            })()}
           </div>
 
           {/* Only meaningful where the derived shortfall actually becomes a

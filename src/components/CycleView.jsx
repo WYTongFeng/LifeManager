@@ -18,7 +18,7 @@ import { nextInstalment } from '../utils/networth';
 import {
   debtsForCycle, setCyclePlan, makeRepayment, setDebtCycleSkip, dueInCycle,
 } from '../utils/debts';
-import { resolveAccounts, defaultAccount, accountById, isRealSpend } from '../utils/accounts';
+import { resolveAccounts, defaultAccount, accountById, isRealSpend, sameId } from '../utils/accounts';
 import { tabsForCycle, budgetLinesForCycle } from '../utils/shareTabs';
 import { AccountSelect, AccountChip } from './AccountPicker';
 import ImpulseSandbox from './ImpulseSandbox';
@@ -175,6 +175,10 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
       dueDates: cost.dates,
       spread: cost.spread,
       estimated: isEstimated(a, cycle),
+      // Whether this bill leaves a 代管 account. cycle.js and networth.js both
+      // need it and neither knows about accounts, so it is resolved here, where
+      // the account list already lives. See computeCycleBudget.
+      custodial: accounts.find(x => sameId(x.id, a.accountId))?.kind === 'custodial',
       // Switched off for this cycle. `cost` is already zeroed by cycleCost, so
       // nothing downstream needs to know — this flag is purely so the row can
       // say so instead of the bill silently vanishing from every total.
@@ -186,7 +190,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
       nextDue: nextDueDate(a),
       daysUntil: daysUntilDue(a),
     };
-  }), [allocations, cycle]);
+  }), [allocations, cycle, accounts]);
 
   const allAllocations = [...autoAllocations, ...manualAllocations];
 
@@ -1069,10 +1073,15 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                     {a.spread && a.charged !== a.budgeted && <> · 每期预留 {money(a.budgeted)}</>}
                     {a.estimated && ' · 预估金额'}
                     {a.essential === false && <> · <span style={{ color: 'var(--color-accent-amber)' }}>非必要</span></>}
+                    {/* Named out loud. It is deliberately NOT inside 固定开销 —
+                        see computeCycleBudget — and a bill that quietly stopped
+                        affecting the total without saying so would read as the
+                        app losing it. */}
+                    {a.custodial && <> · <span style={{ color: 'var(--color-accent-amber)' }}>代管户口付的，不算你的钱</span></>}
                     {a.paid && ' · 本期已付'}
                   </>
                 )}
-              subtitleColor={a.skipped ? 'var(--text-muted)' : a.estimated ? 'var(--color-diet)' : a.paid ? 'var(--color-money)' : 'var(--text-muted)'}
+              subtitleColor={a.skipped ? 'var(--text-muted)' : a.custodial ? 'var(--color-accent-amber)' : a.estimated ? 'var(--color-diet)' : a.paid ? 'var(--color-money)' : 'var(--text-muted)'}
               badge={<AccountChip accounts={accounts} accountId={a.accountId} size="xs" />}
               amount={a.skipped ? money(0) : money(a.charged > 0 ? a.charged : a.budgeted)}
               amountColor={a.skipped ? 'var(--text-muted)' : 'var(--color-diet)'}

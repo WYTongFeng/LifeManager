@@ -160,6 +160,19 @@ export function normalizeAccount(a) {
     // by hand, already net of everything spent, so nothing before now counts.
     openingAt: a.openingAt == null ? LEGACY_WATERMARK : num(a.openingAt),
     target: a.target == null || a.target === '' ? null : num(a.target),
+    // What the target was, cycle by cycle. His dad sets the figure PBE has to
+    // reach and changes it every month — 「那个我每个月都会改」 — and a single
+    // `target` field threw the previous month away every time.
+    //
+    // `target` above stays the CURRENT one and is still what every shortfall
+    // calculation reads, so nothing downstream had to learn about this; the map
+    // is the record. Both are written together (see AccountsView), which is why
+    // they cannot disagree.
+    //
+    // MUST be listed here — this normalizer builds an explicit object, so an
+    // unnamed field is deleted on every read. That is exactly how
+    // `autoShortfallDebt` stayed silently dead, three fields above.
+    targets: a.targets && typeof a.targets === 'object' ? a.targets : {},
     isDefault: Boolean(a.isDefault),
     packages: Array.isArray(a.packages) ? a.packages : [],
     archived: Boolean(a.archived),
@@ -292,7 +305,10 @@ export function reconcileAccount(account, actualBalance, at = Date.now()) {
  * `isTransfer` for "a payment to a person" — the opposite case, money genuinely
  * leaving your hands.
  */
-export function makeTransfer({ fromAccountId, toAccountId, amount, note = '', accounts = [], at = Date.now(), date, time }) {
+export function makeTransfer({
+  fromAccountId, toAccountId, amount, note = '', accounts = [],
+  at = Date.now(), date, time, incomeSourceId = null,
+}) {
   const value = Math.abs(num(amount));
   if (!value || sameId(fromAccountId, toAccountId)) return [];
   const from = accountById(accounts, fromAccountId);
@@ -332,6 +348,29 @@ export function makeTransfer({ fromAccountId, toAccountId, amount, note = '', ac
       accountId: toAccountId,
       merchant: `从 ${from?.name ?? '另一个户口'} 转入`,
       paymentMethod: to?.name ?? '未指定户口',
+      // MONEY LEAVING A 代管 ACCOUNT BECOMES HIS, AND THIS IS THE MOMENT.
+      //
+      // His question, 2026-09-09: 「有些要算收入，有些不用」. Dad puts RM3–5k
+      // into PBE, rent leaves it, and some of what is left he moves to TNG and
+      // spends. None of it was spendable while it sat in PBE — custodial
+      // balances are excluded from ownCash and never counted as income — so the
+      // transfer out is exactly when it enters the spendable pool.
+      //
+      // `isAccountTransfer` and `transferId` are KEPT: the pair must still net
+      // to zero in every gross total, and `txType` still answers 'transfer', so
+      // no spend figure moves. Only the income side is told, and only when he
+      // ticks it — the caller offers the tick solely for custodial → own, where
+      // it cannot double-count.
+      //
+      // `countsAsIncome` is an EXPLICIT flag rather than "has an income
+      // source", and the difference matters: a source id could end up on an
+      // own→own transfer half by an edit or a restore, and inferring from it
+      // would turn moving RM300 from TNG to Maybank into RM300 of income out of
+      // nowhere. test-cycle.mjs has guarded exactly that shape since before
+      // this existed. Only makeTransfer writes the flag, only when asked.
+      ...(incomeSourceId != null
+        ? { isMoneyIn: true, countsAsIncome: true, incomeSourceId }
+        : {}),
     },
   ];
 }
@@ -429,7 +468,31 @@ export function txType(e) {
  *   transfer   no  — your own money changing pockets
  */
 export function isRealSpend(e) {
-  return txType(e) === 'expense';
+  return !inShareTab(e) && txType(e) === 'expense';
+}
+
+/**
+ * Is this record filed under a 共摊本?
+ *
+ * Tested here rather than imported from shareTabs.js on purpose: that module
+ * imports cycle.js, which imports this one, and accounts.js is the bottom of
+ * that stack. It is one field, and the field IS the definition.
+ *
+ * WHY THE SPEND PREDICATES BELOW BOTH CHECK IT
+ * A share tab is counted once, as its net for the cycle (shareTabs.js). If the
+ * RM2,000 rent inside it also answered yes to "did I spend this", every screen
+ * built on these two predicates would charge him for it a second time — and
+ * those screens are not just the money tab: 今天花了多少, the Dashboard, 本周
+ * 回顾, and the midnight rollover that writes the day into `history`
+ * PERMANENTLY. cycle.js can argue itself into correctness one filter at a time;
+ * those five call sites cannot, because they never hear about new kinds of
+ * record. Putting it in the classifier is the only version of this fix that
+ * cannot be forgotten at a call site.
+ *
+ * `isSpendingRecord` deliberately does NOT check it — see its own comment.
+ */
+function inShareTab(e) {
+  return e?.shareTabId != null;
 }
 
 /**
@@ -446,6 +509,7 @@ export function isRealSpend(e) {
  * 多少钱」里面 ... 我要看到的是这个周期我真正消费掉多少钱".
  */
 export function isDailySpend(e) {
+  if (inShareTab(e)) return false;
   const kind = txType(e);
   return kind === 'expense' || kind === 'refund';
 }
@@ -483,6 +547,12 @@ export function isSpendingRecord(e) {
   // payments and repayments, which are real ringgit leaving. `isRealSpend`
   // answers the narrower question "was this me buying something", which is what
   // the cycle's 花掉的 figure and the category breakdown want.
+  //
+  // A 共摊本 record is NOT excluded here, unlike in the two above, and the
+  // difference is the whole point of having two predicates: the RM2,000 rent
+  // genuinely did leave an account, so an account-facing total has to see it.
+  // Only the BUDGET treats it as netted away, because only the budget is
+  // asking "how much of this month was mine".
   const kind = txType(e);
   return kind !== 'transfer' && kind !== 'income';
 }

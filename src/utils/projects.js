@@ -33,7 +33,12 @@
  */
 export function getProjects(expenses) {
   return expenses
-    .filter(e => e.isProject)
+    // A record in a 共摊本 is never also a project. They are the same idea —
+    // money fronted for other people — and a record counted by both would have
+    // its repayments netted twice, once by `myShare` here and once by the tab's
+    // cycle net. The form keeps them exclusive; this refuses to trust that,
+    // because a restored backup can carry both flags. See shareTabs.js.
+    .filter(e => e.isProject && e.shareTabId == null)
     .map(project => {
       const repaidAmount = expenses
         .filter(e => e.repaysExpenseId === project.id)

@@ -334,6 +334,27 @@ check('a pass-through source is never spendable, however much arrives',
 const transferIn = incBudget([
   { date: '2026-08-12', amount: -300, isMoneyIn: true, isAccountTransfer: true, incomeSourceId: 's1' },
 ]);
+// ...unless it is money leaving a 代管 account, which is the one transfer that
+// genuinely enters the spendable pool — 「有些要算收入，有些不用」. It takes an
+// EXPLICIT flag, written only by makeTransfer when he ticks it, so the shape
+// above cannot acquire the meaning by accident.
+const custodialOut = incBudget([
+  { date: '2026-08-12', amount: -500, isMoneyIn: true, isAccountTransfer: true, countsAsIncome: true, incomeSourceId: 's1' },
+]);
+check('a 代管 transfer he marked as spendable IS income',
+  custodialOut.spendableIncome, 500);
+check('...and shows up as money that really arrived',
+  custodialOut.arrivedThisCycle, 500);
+// The pair used to cancel itself out of 花掉的 by arithmetic. Marking the
+// incoming half as income removed it from that sum and left the OUTGOING half
+// behind alone — so moving RM500 of his own money read as RM500 of spending.
+const bothHalves = incBudget([
+  { date: '2026-08-12', amount: 500, isAccountTransfer: true, transferId: 9 },
+  { date: '2026-08-12', amount: -500, isMoneyIn: true, isAccountTransfer: true, countsAsIncome: true, incomeSourceId: 's1', transferId: 9 },
+]);
+check('...and its other half is not left behind as spending',
+  [bothHalves.spentThisCycle, bothHalves.grossSpentThisCycle], [0, 0]);
+
 check('moving your own money between accounts is not income arriving',
   transferIn.spendableIncome, 1000);
 

@@ -5,7 +5,7 @@ import {
   Info, ArrowDownLeft, Wallet, HelpCircle, ArrowRightLeft, Copy, Archive,
 } from '../utils/icons';
 import confetti from 'canvas-confetti';
-import { usePersistentState, useLiveJSON, saveJSON, useToday } from '../utils/storage';
+import { usePersistentState, useLiveJSON, saveJSON, loadJSON, useToday } from '../utils/storage';
 import { num, sumBy, newId } from '../utils/num';
 import { nowTimeStr, toHHMM, shiftDate, describeDate, sortByTime } from '../utils/datetime';
 import {
@@ -214,6 +214,13 @@ export default function MoneyModule({
   // money comes into it, and both have to be able to say so.
   const [formShareTabId, setFormShareTabId] = useState('');
   const [formNewShareTab, setFormNewShareTab] = useState('');
+  // 「这笔每个月都有」. Creating a 固定月费 needed a trip to 本月 and back, which
+  // is one screen too many at the moment you notice you have one — the day you
+  // pay it IS when you know. `formBillDueDay` is the only thing the ledger
+  // cannot already answer; the label, amount and account all come from the
+  // record being logged.
+  const [formNewBill, setFormNewBill] = useState(false);
+  const [formBillDueDay, setFormBillDueDay] = useState('');
 
   // Moving money between your own accounts. Deliberately a separate action from
   // "add expense": it isn't spending, and the one thing it must never do is
@@ -224,6 +231,11 @@ export default function MoneyModule({
   const [tTo, setTTo] = useState(null);
   const [tAmount, setTAmount] = useState('');
   const [tNote, setTNote] = useState('');
+  // 「这笔是我这个月可以花的」 — only ever offered on a 代管 → 我的 transfer,
+  // which is the one direction where money genuinely enters the spendable pool.
+  // See makeTransfer.
+  const [tAsIncome, setTAsIncome] = useState(false);
+  const [tIncomeSourceId, setTIncomeSourceId] = useState('');
 
   // A repayment can land on a later day than the original expense, so this
   // has to scan every date, not just today — otherwise a friend paying you
@@ -498,6 +510,8 @@ export default function MoneyModule({
     setFormAllocationId('');
     setFormShareTabId('');
     setFormNewShareTab('');
+    setFormNewBill(false);
+    setFormBillDueDay('');
   };
 
   const openAddModal = () => {
@@ -553,6 +567,8 @@ export default function MoneyModule({
     setFormAllocationId(expense.allocationId != null ? String(expense.allocationId) : '');
     setFormShareTabId(expense.shareTabId != null ? String(expense.shareTabId) : '');
     setFormNewShareTab('');
+    setFormNewBill(false);
+    setFormBillDueDay('');
     setShowEntryModal(true);
   };
 
@@ -643,11 +659,39 @@ export default function MoneyModule({
     // filed three days late at the turn of the month belongs to the month it
     // was paid in, and stamping it onto the new cycle would set this month's
     // rent from last month's receipt.
-    const allocationId = !formRefund && formAllocationId ? formAllocationId : null;
+    // 「这笔每个月都有」 — create the bill from the record, then fall through
+    // to the linking code below exactly as if it had been picked from the
+    // dropdown. Everything it needs is already on the form: the shop is the
+    // label, the amount is the amount, the account is the account.
+    let allocationId = !formRefund && formAllocationId ? formAllocationId : null;
+    if (!formRefund && !formShareTabId && formNewBill && formMerchant.trim() && magnitude > 0) {
+      const created = {
+        id: newId(),
+        label: formMerchant.trim(),
+        amount: magnitude,
+        frequency: 'monthly',
+        dueDay: Number(formBillDueDay) || Number(date.slice(8, 10)) || 1,
+        accountId,
+        essential: true,
+        // Fixed, not variable. A bill logged from a real payment has a real
+        // figure — marking it 「金额会变」 here would immediately overwrite that
+        // figure with itself as an estimate and gain nothing. He can switch it
+        // in 本月 the first month it comes in different.
+        variable: false,
+      };
+      saveJSON('allocations', [...allocations, created]);
+      allocationId = created.id;
+    }
     if (allocationId) {
       const paidCycle = getCycle(new Date(yy, mm - 1, dd));
-      const target = allocations.find(a => String(a.id) === String(allocationId));
-      let nextAllocations = allocations.map(a => (String(a.id) === String(allocationId)
+      // Read back from storage, not from the `allocations` snapshot this
+      // render closed over. The 「每个月都有」 branch above may have just
+      // written a brand-new bill, and mapping over the stale list would save a
+      // list that does not contain it — deleting it a millisecond after
+      // creating it. Same single-write-path reasoning as storage.js's.
+      const live = loadJSON('allocations', []);
+      const target = live.find(a => String(a.id) === String(allocationId));
+      let nextAllocations = live.map(a => (String(a.id) === String(allocationId)
         ? { ...a, paidFor: paidCycle.start } : a));
       if (target?.variable) {
         // The SUM of everything paid against this bill in that cycle, not just
@@ -734,16 +778,41 @@ export default function MoneyModule({
     setTTo(usable.find(a => !sameId(a.id, fallbackAccountId))?.id ?? null);
     setTAmount('');
     setTNote('');
+    setTAsIncome(false);
+    setTIncomeSourceId('');
     setShowTransferModal(true);
   };
+
+  // 代管 → 我的. The only transfer direction where money that was never
+  // spendable becomes spendable — dad's money sits in PBE, and moving it out is
+  // when it turns into this month's allowance. An own→own transfer must never
+  // offer this: both halves are already his, so counting one as income would
+  // create money.
+  const custodialToOwn =
+    accountById(accounts, tFrom)?.kind === 'custodial'
+    && accountById(accounts, tTo)?.kind !== 'custodial';
 
   const handleSubmitTransfer = (e) => {
     e.preventDefault();
     const amount = Number(tAmount);
     if (!Number.isFinite(amount) || amount <= 0) return;
     if (!tFrom || !tTo || sameId(tFrom, tTo)) return;
+    // Only when the tick is BOTH shown and set. `custodialToOwn` is re-checked
+    // here rather than trusted from render, because the accounts can change
+    // under an open modal and an own→own transfer counted as income would
+    // invent money out of nothing.
+    let sourceId = null;
+    if (custodialToOwn && tAsIncome) {
+      sourceId = tIncomeSourceId || null;
+      if (tIncomeSourceId === '__new') {
+        const created = { id: newId(), label: '生活费', amount: 0, kind: 'income' };
+        saveJSON('incomeSources', [...incomeSources, created]);
+        sourceId = created.id;
+      }
+    }
     const pair = makeTransfer({
       fromAccountId: tFrom, toAccountId: tTo, amount, note: tNote.trim(), accounts,
+      incomeSourceId: sourceId,
     });
     if (pair.length !== 2) return;
     setExpenses([...pair, ...expenses]);
@@ -2091,7 +2160,13 @@ export default function MoneyModule({
                   cycle, once as spending on the day it left. Saying so here also
                   ticks that bill off for this cycle, because it is the same
                   statement. */}
-              {!formRefund && allocations.length > 0 && (
+              {/* Hidden while a 共摊本 is chosen: a record counted by both
+                  machineries would reserve the same ringgit twice (the tab's
+                  net AND the allocation's), so the two are mutually exclusive.
+                  The arithmetic guards against it too — see computeCycleBudget
+                  — but the form should not offer a state that has to be
+                  defended against. */}
+              {!formRefund && !formShareTabId && allocations.length > 0 && (
                 <div>
                   <label style={labelStyle}>这笔是固定月费吗?</label>
                   <select
@@ -2115,6 +2190,47 @@ export default function MoneyModule({
                 </div>
               )}
 
+              {/* 「这笔每个月都有」 — build the bill from the record.
+                  Creating a 固定月费 used to mean a trip to 本月 and back, and
+                  the moment you know you have one is the moment you are paying
+                  it. Only offered when this isn't already linked to an existing
+                  bill or filed in a 共摊本 — all three answer the same question
+                  and only one of them can be true. */}
+              {!formRefund && !formShareTabId && !formAllocationId && (
+                <div>
+                  <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '7px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={formNewBill}
+                      onChange={(e) => setFormNewBill(e.target.checked)}
+                      style={{ width: '15px', height: '15px' }}
+                    />
+                    这笔每个月都有（建成固定月费）
+                  </label>
+
+                  {formNewBill && (
+                    <>
+                      <div style={{ marginTop: '7px' }}>
+                        <label style={labelStyle}>每月几号扣?</label>
+                        <select
+                          value={formBillDueDay || String(Number(formDate.slice(8, 10)) || 1)}
+                          onChange={(e) => setFormBillDueDay(e.target.value)}
+                          style={inputStyle}
+                        >
+                          {Array.from({ length: 31 }, (_, i) => i + 1).map(d => (
+                            <option key={d} value={d}>{d} 号</option>
+                          ))}
+                        </select>
+                      </div>
+                      <p style={{ fontSize: '0.68rem', color: 'var(--color-money)', marginTop: '5px', lineHeight: 1.5 }}>
+                        会用<strong>这笔的名字、金额和户口</strong>建一条固定月费，
+                        然后马上把这笔算成它这个月的付款。下个月再记同一笔，在上面的选单里挑它就好。
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+
               {/* 共摊本. Offered on every direction, because a tab has two
                   sides: the bills leaving and the housemates' money arriving.
                   Nothing filed here counts on its own — only the tab's net for
@@ -2123,7 +2239,13 @@ export default function MoneyModule({
                 <label style={labelStyle}>算进共摊本吗?</label>
                 <select
                   value={formShareTabId}
-                  onChange={(e) => setFormShareTabId(e.target.value)}
+                  onChange={(e) => {
+                    setFormShareTabId(e.target.value);
+                    // Picking a tab clears the two things it is mutually
+                    // exclusive with, so a state that was legal a moment ago
+                    // cannot survive into the saved record.
+                    if (e.target.value) { setFormAllocationId(''); setFormIsProject(false); }
+                  }}
                   style={inputStyle}
                 >
                   <option value="">不用，普通一笔</option>
@@ -2173,8 +2295,13 @@ export default function MoneyModule({
 
               {/* 项目 (project): marks a fronted expense as one others owe you
                   back on, so later repayments — however many, however late —
-                  can be filed under it instead of floating unlinked. */}
-              {!formRefund && (
+                  can be filed under it instead of floating unlinked.
+
+                  Hidden while a 共摊本 is chosen. A project IS a share tab with
+                  one bill in it — offering both on one record would let the
+                  same money be netted twice, by two mechanisms that do not know
+                  about each other. */}
+              {!formRefund && !formShareTabId && (
                 <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '7px', cursor: 'pointer' }}>
                   <input
                     type="checkbox"
@@ -2402,6 +2529,47 @@ export default function MoneyModule({
                   onChange={(e) => setTNote(e.target.value)} style={inputStyle}
                 />
               </div>
+
+              {/* 代管 → 我的 only. This is the moment money that was never
+                  spendable becomes spendable — 「有些要算收入，有些不用」 —
+                  and the only transfer where saying so cannot invent money. */}
+              {custodialToOwn && (
+                <div style={{
+                  padding: '0.7rem 0.8rem', borderRadius: 'var(--radius-sm)',
+                  background: 'var(--color-money-soft)', border: '1px solid var(--color-money)',
+                }}>
+                  <label style={{ ...labelStyle, display: 'flex', alignItems: 'flex-start', gap: '8px', cursor: 'pointer', lineHeight: 1.5 }}>
+                    <input
+                      type="checkbox" checked={tAsIncome}
+                      onChange={(e) => setTAsIncome(e.target.checked)}
+                      style={{ width: '15px', height: '15px', marginTop: '2px', flexShrink: 0 }}
+                    />
+                    <span>
+                      <strong>这笔是我这个月可以花的</strong><br />
+                      <span style={{ fontSize: '0.67rem', color: 'var(--text-muted)' }}>
+                        {accountById(accounts, tFrom)?.name} 的钱本来不算你的，
+                        转出来这一刻才变成你的 —— 勾了就算这个月的收入，每日额度跟着变。
+                        只是搬钱去付东西的话，<strong>不用勾</strong>。
+                      </span>
+                    </span>
+                  </label>
+
+                  {tAsIncome && (
+                    <select
+                      value={tIncomeSourceId}
+                      onChange={(e) => setTIncomeSourceId(e.target.value)}
+                      style={{ ...inputStyle, marginTop: '8px' }}
+                    >
+                      <option value="">还没归类（不会算进本月收入）</option>
+                      {incomeSources.filter(src => src.kind !== 'passthrough').map(src => (
+                        <option key={src.id} value={String(src.id)}>{src.label}</option>
+                      ))}
+                      <option value="__new">+ 新开一个「生活费」</option>
+                    </select>
+                  )}
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: '10px', marginTop: '0.5rem' }}>
                 <button type="button" onClick={() => setShowTransferModal(false)} className="btn-secondary" style={{ flex: 1 }}>取消</button>
                 <button type="submit" className="btn-primary" style={{ flex: 1 }} disabled={sameId(tFrom, tTo)}>记录转账</button>

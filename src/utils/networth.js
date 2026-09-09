@@ -475,13 +475,25 @@ export function computeSpendable({ accounts = [], allocations = [], debts = [], 
     const paidByAllocation = new Map();
     for (const e of expenses) {
       if (e?.allocationId == null) continue;
+      // Same guard as computeCycleBudget's — a 共摊本 record is accounted for
+      // by that tab's net and must not also pay down an allocation here, or
+      // the two screens would disagree about the same bill.
+      if (e?.shareTabId != null) continue;
       if (!isInCycle(e.date ?? cycle.start, cycle)) continue;
       const key = String(e.allocationId);
       paidByAllocation.set(key, (paidByAllocation.get(key) ?? 0) + Math.abs(num(e.amount)));
     }
 
+    const custodialIds = new Set(
+      accounts.filter(x => x?.kind === 'custodial').map(x => String(x.id)));
+
     for (const raw of allocations) {
       const a = normalizeAllocation(raw);
+      // A bill drawn on a 代管 account never reduces what he can spend: its
+      // balance is not in `ownCash` either, so subtracting the bill charged him
+      // twice for money that was never his. Same rule as computeCycleBudget's —
+      // resolved from the account list here, which this function already has.
+      if (a.accountId != null && custodialIds.has(String(a.accountId))) continue;
       const { charged } = cycleCost(a, cycle);
       if (charged <= 0) continue;
       const paid = a.paidFor === cycle.start

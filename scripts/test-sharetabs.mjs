@@ -13,6 +13,8 @@ import {
   contributors, outgoings,
 } from '../src/utils/shareTabs.js';
 import { getCycle, computeCycleBudget } from '../src/utils/cycle.js';
+import { isDailySpend, isRealSpend, isSpendingRecord } from '../src/utils/accounts.js';
+import { getProjects } from '../src/utils/projects.js';
 
 let pass = 0, fail = 0;
 const check = (name, got, want) => {
@@ -119,6 +121,65 @@ const octBudget = computeCycleBudget({
 });
 near('a positive net raises the month\'s income instead', octBudget.spendableIncome, 2500 + 354.34);
 near('...and commits nothing', octBudget.shareCommitted, 0);
+
+// --- the classifier, which is where the leaks would have been ---------------
+// 今天花了多少, the Dashboard, 本周回顾 and the midnight rollover all filter on
+// isDailySpend and none of them has ever heard of a share tab. If the rent
+// answered yes there, the day it was paid would read as blowing the daily cap
+// — and the rollover writes that day into `history` permanently.
+check('a tabbed bill is not daily spending', isDailySpend(sept[0]), false);
+check('...nor "real" spending, so it stays out of the category circle', isRealSpend(sept[0]), false);
+check('a tabbed arrival is not daily spending either', isDailySpend(sept[3]), false);
+check('an ordinary expense is completely unaffected',
+  [isDailySpend(sept[6]), isRealSpend(sept[6])], [true, true]);
+check('but the account-facing predicate still sees it — the money DID leave',
+  isSpendingRecord(sept[0]), true);
+
+// --- two machineries must never both count the same record ------------------
+// The form keeps 共摊本 / 固定月费 / 项目 mutually exclusive. These are the
+// arithmetic refusing to trust that, because a restored backup or an older
+// build can produce a record carrying both.
+const bothTabAndBill = [
+  { id: 1, date: '2026-09-05', merchant: '房租', amount: 2000, shareTabId: 'rt', allocationId: 'a1' },
+];
+const rentBill = [{ id: 'a1', label: '房租', amount: 2000, frequency: 'monthly', dueDay: 5 }];
+const conflicted = computeCycleBudget({
+  incomeSources: income,
+  allocations: [{ ...rentBill[0], budgeted: 2000, charged: 2000 }],
+  expenses: bothTabAndBill,
+  cycle,
+  shareLines: budgetLinesForCycle([tab], bothTabAndBill, cycle),
+});
+near('a record in a tab does not also pay down an allocation', conflicted.shareCommitted, 2000);
+near('...so the bill is reserved once by the allocation and once by the tab, not three times',
+  conflicted.committed, 4000);
+check('a record in a tab is never also a project',
+  getProjects([{ id: 1, merchant: 'x', amount: 100, isProject: true, shareTabId: 'rt' }]).length, 0);
+check('...while an ordinary project is untouched',
+  getProjects([{ id: 1, merchant: 'x', amount: 100, isProject: true }]).length, 1);
+
+// --- a bill drawn on a 代管 account -----------------------------------------
+// PBE's balance is excluded from ownCash and its inflows are not income, so
+// subtracting a bill it pays from an income-based budget charged him twice for
+// money that was never his: RM2,000 of rent a month, ~RM66/day of allowance
+// that quietly did not exist.
+const rentOnPbe = [{ id: 'a1', label: '房租', budgeted: 2000, charged: 2000, custodial: true }];
+const netflixOnHis = [{ id: 'a2', label: 'Netflix', budgeted: 55, charged: 55 }];
+
+const custodialOnly = computeCycleBudget({
+  incomeSources: income, allocations: rentOnPbe, expenses: [], cycle,
+});
+near('a 代管 bill does not reduce his budget', custodialOnly.committed, 0);
+near('...but is still reported, because the money really does leave',
+  custodialOnly.custodialCommitted, 2000);
+near('...so the month is his income, whole', custodialOnly.available, 2500);
+
+const mixed = computeCycleBudget({
+  incomeSources: income, allocations: [...rentOnPbe, ...netflixOnHis], expenses: [], cycle,
+});
+near('a bill on his own account still counts, unchanged', mixed.committed, 55);
+near('...and the two are reported apart', mixed.custodialCommitted, 2000);
+near('...and 花掉的 is untouched by either', mixed.grossSpentThisCycle, 0);
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : fail + ' FAILED'}  (${pass} passed)`);
 if (fail > 0) process.exit(1);

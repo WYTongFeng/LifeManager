@@ -203,9 +203,14 @@ export function computeCycleBudget({
   //
   // `Math.max` would have been the tempting rule and is wrong for exactly that
   // case. An arrival linked to no source (a gift, a one-off) counts as itself.
+  // A transfer half is admitted ONLY when it carries an income source — that is
+  // money moved out of a 代管 account and deliberately marked as his to spend
+  // (see makeTransfer). Untagged transfers stay excluded: both halves are his
+  // own money and counting one as income would invent it.
+  const countsAsArrival = (e) =>
+    e.isMoneyIn && !inShareTab(e) && (!e.isAccountTransfer || e.countsAsIncome === true);
   const arrivals = expenses.filter(e =>
-    e.isMoneyIn && !e.isAccountTransfer && !inShareTab(e)
-    && isInCycle(e.date ?? cycle.start, cycle));
+    countsAsArrival(e) && isInCycle(e.date ?? cycle.start, cycle));
   const arrivedBySource = new Map();
   let arrivedUnlinked = 0;
   for (const e of arrivals) {
@@ -291,6 +296,13 @@ export function computeCycleBudget({
   const paidByAllocation = new Map();
   for (const e of expensesThisCycle) {
     if (e.allocationId == null) continue;
+    // A record cannot be counted by BOTH machineries. If it is in a 共摊本 its
+    // whole value is already inside that tab's net, so feeding it to the
+    // allocation's `max(planned, paid)` rule as well would reserve the same
+    // ringgit twice. The form keeps the two mutually exclusive; this is the
+    // arithmetic refusing to trust that, because a restored backup or a record
+    // written by an older build can carry both.
+    if (inShareTab(e)) continue;
     const key = String(e.allocationId);
     paidByAllocation.set(key, (paidByAllocation.get(key) ?? 0) + Math.abs(Number(e.amount) || 0));
   }
@@ -316,11 +328,23 @@ export function computeCycleBudget({
   const chargedThisCycle = a => Math.max(
     a.charged != null ? a.charged : plannedThisCycle(a),
     paidByAllocation.get(String(a.id)) ?? 0);
-  const committed = sum(allocations, amountThisCycle) + shareCommitted;
+  // A BILL DRAWN ON A 代管 ACCOUNT IS NOT SPENT OUT OF HIS MONEY.
+  //
+  // `custodial` is stamped on each allocation by the screen that knows the
+  // accounts (CycleView). PBE's balance is deliberately excluded from `ownCash`
+  // and its inflows are not income — so subtracting a bill it pays from an
+  // income-based budget charged him twice for money that was never his: once by
+  // not counting it, once by spending it. RM2,000 of rent, every month, or
+  // about RM66 a day of allowance that quietly did not exist.
+  //
+  // Reported separately rather than dropped, because it is still true that the
+  // money leaves on the 5th and he still wants to see it coming.
+  const custodialCommitted = sum(allocations.filter(a => a.custodial), amountThisCycle);
+  const committed = sum(allocations.filter(a => !a.custodial), amountThisCycle) + shareCommitted;
   // Same treatment as `committed`: a tab's net really did leave the accounts
   // this cycle, so the "what actually goes out" figure has to carry it too.
-  const committedCharged = sum(allocations, chargedThisCycle) + shareCommitted;
-  const committedUnpaid = sum(allocations.filter(a => !a.paid), amountThisCycle);
+  const committedCharged = sum(allocations.filter(a => !a.custodial), chargedThisCycle) + shareCommitted;
+  const committedUnpaid = sum(allocations.filter(a => !a.paid && !a.custodial), amountThisCycle);
 
   // 进账 (`isMoneyIn`) — money genuinely arriving into an account from outside:
   // an allowance, a salary landing, a top-up from elsewhere. Stored as a
@@ -355,8 +379,18 @@ export function computeCycleBudget({
   // A FOURTH exclusion, and the broadest: anything filed under a 共摊本. Its
   // whole cycle is represented once, by the tab's net, in `shareCommitted` /
   // `shareIncome` below. See shareTabs.js.
+  // TRANSFERS ARE EXCLUDED EXPLICITLY, not left to cancel out.
+  //
+  // They used to be absent from this filter because a pair nets to zero on its
+  // own: +500 leaving one account, −500 arriving at another, both ordinary
+  // records. That stopped being true the moment a 代管 → 我的 transfer could be
+  // marked as income: its incoming half gains `isMoneyIn`, the line above drops
+  // it, and the OUTGOING half is left behind alone — so moving RM500 of his own
+  // money read as RM500 of spending. Relying on two records to cancel is a
+  // property, not a rule; this is the rule.
   const budgetMovement = expensesThisCycle.filter(e =>
-    !e.isMoneyIn && e.repaysDebtId == null && !linkedToLiveBill(e) && !inShareTab(e));
+    !e.isMoneyIn && !e.isAccountTransfer && e.repaysDebtId == null
+    && !linkedToLiveBill(e) && !inShareTab(e));
   const spentThisCycle = sum(budgetMovement);
 
   // Two different questions that `spentThisCycle` alone can't answer, because
@@ -422,7 +456,7 @@ export function computeCycleBudget({
     // else: a housemate's RM354 is not money arriving to spend, it is the tab
     // filling back up. 「实际进账」 would otherwise print a figure the income
     // list beside it deliberately does not contain.
-    expensesThisCycle.filter(e => e.isMoneyIn && !e.isAccountTransfer && !inShareTab(e)),
+    expensesThisCycle.filter(countsAsArrival),
     e => Math.abs(Number(e.amount) || 0)
   );
 
@@ -485,6 +519,9 @@ export function computeCycleBudget({
     // of leaving an unexplained lump inside 固定开销.
     shareCommitted,
     shareIncome,
+    // Bills paid out of a 代管 account: real, dated, worth seeing — and
+    // deliberately not inside `committed`, because they are not his money.
+    custodialCommitted,
     spentThisCycle,
     arrivedThisCycle,
     netThisCycle,
