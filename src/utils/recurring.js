@@ -182,6 +182,44 @@ export function setCycleActual(allocations = [], id, cycleStart, amount) {
   });
 }
 
+/**
+ * Undo one cycle's "paid" stamp after the expense that made it true stops
+ * being linked — a payment moving into a 共摊本 via 归类中心, say (see
+ * ReclassifyCenter.jsx). The write MoneyModule's save handler makes when a
+ * payment IS linked, in reverse.
+ *
+ * `remainingAmount` is what's STILL genuinely linked to this bill in this
+ * cycle after the record in question is gone — the caller sums whatever
+ * OTHER expenses still carry this `allocationId` in this cycle's window,
+ * same as the save path already does in the other direction.
+ *
+ * Mirrors the stamps rather than deleting them outright:
+ *   · another payment still linked this cycle  → stays marked paid by it. A
+ *     variable bill's "what it really cost" figure shrinks to that remainder.
+ *   · nothing left paying it this cycle         → the stamp clears, but ONLY
+ *     if THIS cycle is the one it claims. A bill paid, reclassified, then
+ *     paid again this cycle before this runs must not lose a stamp this
+ *     detach never made.
+ */
+export function detachCyclePayment(allocations = [], id, cycleStart, remainingAmount = 0) {
+  return allocations.map(a => {
+    if (String(a.id) !== String(id)) return a;
+    if (remainingAmount > 0) {
+      return a.variable
+        ? { ...a, actuals: { ...(a.actuals ?? {}), [cycleStart]: num(remainingAmount) } }
+        : a;
+    }
+    const next = { ...a };
+    if (a.paidFor === cycleStart) delete next.paidFor;
+    if (a.variable && a.actuals && cycleStart in a.actuals) {
+      const actuals = { ...a.actuals };
+      delete actuals[cycleStart];
+      next.actuals = actuals;
+    }
+    return next;
+  });
+}
+
 /** This cycle's per-occurrence amount: the real bill if known, else the estimate. */
 export function resolveAmount(allocation, cycle) {
   if (!allocation.variable) return num(allocation.amount);

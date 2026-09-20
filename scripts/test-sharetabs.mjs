@@ -97,16 +97,24 @@ const income = [{ id: 'sal', label: '实习薪水', amount: 2500, kind: 'income'
 const lines = budgetLinesForCycle([tab], sept, cycle);
 check('one line, carrying the net', lines, [{ id: 'rt', label: '房友共摊', net: -1062.94 }]);
 
+// --- while the cycle is still running, the net does not press the budget ----
+// His rule, 2026-09-20: "不压，月底才结算" — a housemate two days from paying
+// is not a bill this cycle should already count as lost, so the daily
+// allowance must read exactly as if the tab did not exist until the cycle is
+// actually over. `cycle` here (built from a September date) IS the live
+// cycle for as long as this suite runs on its real clock in September 2026 —
+// see the "once the cycle has ended" block below for the settled half of
+// this rule, tested against a cycle safely in the past.
 const withTab = computeCycleBudget({ incomeSources: income, allocations: [], expenses: sept, cycle, shareLines: lines });
 const noTab = computeCycleBudget({ incomeSources: income, allocations: [], expenses: sept, cycle });
 
-near('the net joins 固定开销 exactly once', withTab.shareCommitted, 1062.94);
-near('...and is reported on its own so the screen can name it', withTab.committed, 1062.94);
-near('the RM2,000 rent is NOT spending', withTab.grossSpentThisCycle, 16.50);
+near('a live cycle\'s net does not join 固定开销 yet', withTab.shareCommitted, 0);
+near('...so nothing is committed against it either', withTab.committed, 0);
+near('the RM2,000 rent is NOT spending (that part of the rule never changes)', withTab.grossSpentThisCycle, 16.50);
 near('...and the housemates\' money is NOT income', withTab.spendableIncome, 2500);
 near('...nor an unfiled arrival needing to be explained away', withTab.arrivedUnlinked, 0);
-near('so the month is income − net, and nothing double-counted',
-  withTab.available, 2500 - 1062.94 - 16.50);
+near('so the live month is just income minus ordinary spend, tab untouched',
+  withTab.available, 2500 - 16.50);
 
 // The same records with no `shareLines` passed still must not leak in through
 // the individual totals — the exclusion is driven by the record, not the call.
@@ -114,13 +122,34 @@ near('a tabbed record never counts as spending, even if the caller forgets the l
   noTab.grossSpentThisCycle, 16.50);
 near('...and never as an arrival either', noTab.arrivedThisCycle, 0);
 
-// 「多的算收入」 end to end.
+// 「多的算收入」 while still live: still 0, for the same "not over yet" reason
+// — a tab running ahead this week is not income banked early.
 const octBudget = computeCycleBudget({
   incomeSources: income, allocations: [], expenses: octLatecomers, cycle: next,
   shareLines: budgetLinesForCycle([tab], octLatecomers, next),
 });
-near('a positive net raises the month\'s income instead', octBudget.spendableIncome, 2500 + 354.34);
+near('a live cycle\'s positive net is not banked as income early', octBudget.spendableIncome, 2500);
 near('...and commits nothing', octBudget.shareCommitted, 0);
+
+// --- once the cycle has ENDED, its net settles automatically ----------------
+// No separate "结算" stamp is checked here — a cycle whose `end` is in the
+// past has nothing left to wait for. Built from a January date so it is
+// genuinely over relative to this suite's real clock (pinned well past it),
+// unlike `cycle`/`next` above which are this suite's OWN live/upcoming
+// months and must stay 0 for as long as that pin holds.
+const janCycle = getCycle(new Date(2026, 0, 20));
+const jan = [
+  { id: 101, date: '2026-01-05', merchant: '房租', amount: 2000, shareTabId: 'rt' },
+  { id: 102, date: '2026-01-08', merchant: 'TIME wifi', amount: 99, shareTabId: 'rt' },
+  { id: 103, date: '2026-01-12', merchant: 'Spotify', amount: 26.90, shareTabId: 'rt' },
+  { id: 104, date: '2026-01-06', merchant: '阿明', amount: -354.32, shareTabId: 'rt' },
+];
+const janLines = budgetLinesForCycle([tab], jan, janCycle);
+const janBudget = computeCycleBudget({ incomeSources: income, allocations: [], expenses: jan, cycle: janCycle, shareLines: janLines });
+near('an ended cycle\'s net joins 固定开销, exactly once', janBudget.shareCommitted, 1771.58);
+near('...and commits exactly that', janBudget.committed, 1771.58);
+near('so an ended month is income minus the settled net, nothing double-counted',
+  janBudget.available, 2500 - 1771.58);
 
 // --- the classifier, which is where the leaks would have been ---------------
 // 今天花了多少, the Dashboard, 本周回顾 and the midnight rollover all filter on
@@ -138,17 +167,19 @@ check('but the account-facing predicate still sees it — the money DID leave',
 // --- two machineries must never both count the same record ------------------
 // The form keeps 共摊本 / 固定月费 / 项目 mutually exclusive. These are the
 // arithmetic refusing to trust that, because a restored backup or an older
-// build can produce a record carrying both.
+// build can produce a record carrying both. Run against `janCycle` (ended),
+// not the live `cycle` — a live cycle's shareCommitted is always 0 by the
+// rule just above, which would make this guard untestable rather than proven.
 const bothTabAndBill = [
-  { id: 1, date: '2026-09-05', merchant: '房租', amount: 2000, shareTabId: 'rt', allocationId: 'a1' },
+  { id: 1, date: '2026-01-05', merchant: '房租', amount: 2000, shareTabId: 'rt', allocationId: 'a1' },
 ];
 const rentBill = [{ id: 'a1', label: '房租', amount: 2000, frequency: 'monthly', dueDay: 5 }];
 const conflicted = computeCycleBudget({
   incomeSources: income,
   allocations: [{ ...rentBill[0], budgeted: 2000, charged: 2000 }],
   expenses: bothTabAndBill,
-  cycle,
-  shareLines: budgetLinesForCycle([tab], bothTabAndBill, cycle),
+  cycle: janCycle,
+  shareLines: budgetLinesForCycle([tab], bothTabAndBill, janCycle),
 });
 near('a record in a tab does not also pay down an allocation', conflicted.shareCommitted, 2000);
 near('...so the bill is reserved once by the allocation and once by the tab, not three times',

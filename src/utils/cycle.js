@@ -86,6 +86,20 @@ export function isInCycle(dateStr, cycle) {
   return dateStr >= cycle.start && dateStr < cycle.end;
 }
 
+/**
+ * Has this cycle's last day already passed? The single question 共摊本
+ * settlement is built on (see computeCycleBudget's `cycleHasEnded`) — a
+ * live cycle's net does not press the budget, an ended one settles into it
+ * automatically, no separate stamp required.
+ *
+ * `todayStr` takes a pre-computed YYYY-MM-DD so a caller already holding one
+ * (computeCycleBudget does) isn't made to build a second `Date` for the same
+ * instant; omit it to ask about right now.
+ */
+export function hasCycleEnded(cycle, todayStr = ymd(new Date())) {
+  return todayStr >= cycle.end;
+}
+
 /** The cycle immediately before this one — for "vs last cycle" comparisons. */
 export function getPreviousCycle(cycle, startDay = CYCLE_START_DAY) {
   const dayBefore = new Date(cycle.startDate);
@@ -175,13 +189,38 @@ export function computeCycleBudget({
   // would charge the same ringgit twice, which is the failure this file spends
   // most of its length avoiding.
   const inShareTab = (e) => e?.shareTabId != null;
+  const todayStr = ymd(new Date());
 
-  // The share tabs, folded in once each. A negative net is money he really is
-  // out of pocket for this cycle, so it joins 固定开销; a positive one means the
-  // tab collected more than it spent, which is income. Nothing in between ever
-  // reaches the budget — that is the entire rule.
-  const shareCommitted = shareLines.reduce((t, l) => t + (l.net < 0 ? -l.net : 0), 0);
-  const shareIncome = shareLines.reduce((t, l) => t + (l.net > 0 ? l.net : 0), 0);
+  // A LIVE cycle's net does not press the budget — only a cycle that has
+  // ENDED does. His own words, 2026-09-20: "不压，月底才结算" — a housemate two
+  // days from paying is not a bill this cycle should take as already lost, so
+  // the daily allowance has to read exactly as if the tab did not exist while
+  // the month is still running.
+  //
+  // "结算" itself needs no separate stamp to check here: a cycle whose `end`
+  // is in the past has nothing left to wait for, so it settles automatically
+  // the moment it's over. The one place besides the live 共摊本 card that ever
+  // asks this question again is textExport.js's 上个月 report — a PAST month,
+  // exported as text, has to show what the tab really cost that month, not a
+  // figure still frozen on "still waiting". (A user-facing "结算" button, if
+  // one ever exists, would only be an acknowledgment UI sits on top of this —
+  // never a second source of truth for whether the net counts.) Anything else
+  // that draws a claim on this cycle's income from a 共摊本 — CycleView's 钱去
+  // 哪里了 pie included — has to ask the same exported `hasCycleEnded`, or it
+  // will disagree with the numbers sitting right above it.
+  const cycleHasEnded = hasCycleEnded(cycle, todayStr);
+
+  // The share tabs, folded in once each — but only once the cycle is over. A
+  // negative net is money he really is out of pocket for that cycle, so it
+  // joins 固定开销; a positive one means the tab collected more than it spent,
+  // which is income. Nothing in between ever reaches the budget, ended or not
+  // — that is the entire rule.
+  const shareCommitted = cycleHasEnded
+    ? shareLines.reduce((t, l) => t + (l.net < 0 ? -l.net : 0), 0)
+    : 0;
+  const shareIncome = cycleHasEnded
+    ? shareLines.reduce((t, l) => t + (l.net > 0 ? l.net : 0), 0)
+    : 0;
 
   const sum = (list, pick = x => x.amount) =>
     list.reduce((total, item) => total + (Number(pick(item)) || 0), 0);
@@ -505,8 +544,8 @@ export function computeCycleBudget({
   // `daily`, not `realMovement` — a repayment must not eat today's allowance
   // either, for the same reason it doesn't eat the cycle's. This is the number
   // the user sees most often, so getting it wrong here would be the version of
-  // this bug they'd actually notice.
-  const todayStr = ymd(new Date());
+  // this bug they'd actually notice. `todayStr` is computed once, at the top
+  // of this function — same value `cycleHasEnded` uses above.
   const spentToday = sum(daily.filter(e => e.date === todayStr));
 
   return {

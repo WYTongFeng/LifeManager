@@ -2,6 +2,41 @@
 
 Tracks progress toward turning the LifeManager mockup into a complete personal app. Updated as we go.
 
+## M58 — 归类中心, and a share tab that doesn't jump the gun 🚧 phase 1/2 of 5 — v1.12.0
+
+A 2026-09-20 check-in surfaced two things at once: some of this cycle's rent/Time/Spotify had been
+logged as plain expenses before 共摊本 existed to catch them, with no way back short of deleting and
+re-entering each one — and once the real cash flow got worked out (his dad's RM2,500 covers the
+whole RM2,000 rent, five housemates separately refund their share of it, so his own share is really
+~RM302, not RM2,000), the household bills were headed INTO the share tab, which would have pressed
+his daily allowance downward every time a bill left before housemates had paid back their part. Five
+steps were scoped (see the plan doc sent that session); this ships the first two.
+
+**归类中心.** A new full-screen search over every expense ever logged — by cycle/prior
+cycle/all-time/custom range, direction, category, merchant text, and a new 归属 filter
+(`recordOwnership.js`) that reads the same priority order the budget arithmetic already trusts
+(共摊本 beats 项目/欠款/固定月费 beats 普通). Select rows, batch **归入共摊本** / **移出共摊本** /
+**改分类** — each opens a confirmation screen listing exactly what will change and what's being
+skipped and why, before a single record is touched (his own ask: "可以有一些手动确认的吗，我比较安
+心一点"). Moving a bill-linked payment into a tab un-claims it from its allocation too
+(`detachCyclePayment` in recurring.js) rather than leaving a phantom "already paid" stamp behind.
+Reachable from 记账→今天 (next to 导出) and from each 共摊本 card ("把已经记过的归进来").
+
+**共摊本 stopped pressing the budget mid-month.** His rule: "不压，月底才结算" — a housemate two days
+from paying back shouldn't make this week look like it's already lost. `computeCycleBudget` now
+folds a tab's net into `committed`/`spendableIncome` only once `hasCycleEnded(cycle)` is true; a live
+cycle reports the net (still visible on the card) but doesn't let it touch the daily allowance. This
+needed no new "settled" flag — a cycle whose `end` has passed has nothing left to wait for, and
+settles itself the moment it's over. Caught in testing: CycleView's 钱去哪里了 pie built its 共摊本
+slice straight from the tab's raw records, independent of this new rule — it agreed with the top
+numbers before this change (both always included the net) and would have silently stopped agreeing
+without the same gate. Fixed the same way, off the same exported `hasCycleEnded`.
+
+**Still to come:** whether PBE stays 代管 (his call, no code needed — the "只记录，不算进储蓄"
+checkbox that does what he wants already exists on AccountsView); a bills list living on the share
+tab itself, replacing the 固定月费 entries that used to represent rent/Time/Spotify; and a manual,
+reversible "结算" acknowledgment banner for a cycle that's ended but hasn't been looked at yet.
+
 ## M57 — A month that isn't like the others ✅ done — v1.11.0
 
 Nine complaints from a second round of daily use (2026-09-09). They looked unrelated and were one

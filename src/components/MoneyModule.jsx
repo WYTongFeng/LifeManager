@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Smartphone, Plus, Trash2, Pencil, X, Check, AlertTriangle,
-  Info, ArrowDownLeft, Wallet, HelpCircle, ArrowRightLeft, Copy, Archive,
+  Info, ArrowDownLeft, Wallet, HelpCircle, ArrowRightLeft, Copy, Archive, Search,
 } from '../utils/icons';
 import confetti from 'canvas-confetti';
 import { usePersistentState, useLiveJSON, saveJSON, loadJSON, useToday } from '../utils/storage';
@@ -35,6 +35,8 @@ import { isNativeAvailable } from '../utils/tngNative';
 import { getCycle } from '../utils/cycle';
 import { setCycleActual } from '../utils/recurring';
 import { tabsForCycle, contributors, outgoings } from '../utils/shareTabs';
+import ReclassifyCenter from './ReclassifyCenter';
+import { OWNERSHIP } from '../utils/recordOwnership';
 
 const inputStyle = {
   width: '100%',
@@ -226,6 +228,11 @@ export default function MoneyModule({
   // "add expense": it isn't spending, and the one thing it must never do is
   // land in the budget or a category breakdown. See makeTransfer in accounts.js.
   const [showTextExport, setShowTextExport] = useState(false);
+  // 归类中心 — search every logged record and fix what it's filed under. The
+  // prefill lets the 共摊本 card open it pre-filtered to "还没归类, this tab
+  // pre-selected", since that's the question that card itself raises.
+  const [showReclassify, setShowReclassify] = useState(false);
+  const [reclassifyPrefill, setReclassifyPrefill] = useState(null);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [tFrom, setTFrom] = useState(null);
   const [tTo, setTTo] = useState(null);
@@ -1044,6 +1051,17 @@ export default function MoneyModule({
         >
           <Copy size={14} /> 导出
         </button>
+        {/* 归类中心 — search every record ever logged and fix what it's filed
+            under. Reachable from here rather than a dedicated tab: this is
+            where the thought occurs, same reasoning as 导出 right above it. */}
+        <button
+          onClick={() => { setReclassifyPrefill(null); setShowReclassify(true); }}
+          className="btn-secondary"
+          style={{ padding: '8px 12px', fontSize: '0.78rem' }}
+          title="搜索所有记录，批量改归属"
+        >
+          <Search size={14} /> 归类
+        </button>
         {accounts.filter(a => !a.archived).length > 1 && (
           <button
             onClick={openTransferModal}
@@ -1398,6 +1416,23 @@ export default function MoneyModule({
                       这个月还没有人给钱。
                     </div>
                   )}
+
+                  {/* Opens 归类中心 pre-filtered to "还没归类" with this tab
+                      already picked as the target — the exact question this
+                      card raises when a bill you know is in here isn't
+                      showing up above. */}
+                  <button
+                    onClick={() => {
+                      setReclassifyPrefill({ ownership: OWNERSHIP.PLAIN, shareTabId: t.id });
+                      setShowReclassify(true);
+                    }}
+                    style={{
+                      marginTop: '9px', background: 'none', border: 'none', padding: 0,
+                      color: 'var(--color-money)', fontSize: '0.68rem', fontWeight: '700', cursor: 'pointer',
+                    }}
+                  >
+                    把已经记过的归进来 →
+                  </button>
                 </div>
               );
             })}
@@ -2494,6 +2529,18 @@ export default function MoneyModule({
       )}
 
       {showTextExport && <TextExportModal onClose={() => setShowTextExport(false)} />}
+
+      {showReclassify && (
+        <ReclassifyCenter
+          expenses={allExpenses ?? expenses}
+          shareTabs={shareTabs}
+          cycle={moneyCycle}
+          onSaveExpense={onSaveExpense}
+          onClose={() => { setShowReclassify(false); setReclassifyPrefill(null); }}
+          initialOwnership={reclassifyPrefill?.ownership ?? ''}
+          initialShareTabId={reclassifyPrefill?.shareTabId ?? ''}
+        />
+      )}
 
       {/* Transfer modal */}
       {showTransferModal && (

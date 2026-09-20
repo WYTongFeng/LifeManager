@@ -1,6 +1,7 @@
 import {
   getCycle, isInCycle, computeCycleBudget, projectImpact,
   resolveAllocationAmount, isEstimated, getPreviousCycle, grossSpentByDayIndex,
+  hasCycleEnded,
 } from '../src/utils/cycle.js';
 
 let pass = 0, fail = 0;
@@ -33,6 +34,24 @@ check('a 10th-start cycle still rolls back before the 10th',
   getCycle(on(2026, 8, 9), 10).start, '2026-07-10');
 check('  ...and ends on this month\'s 10th',
   getCycle(on(2026, 8, 9), 10).end, '2026-08-10');
+
+// --- has this cycle ended --------------------------------------------------
+// The single question 共摊本 settlement is built on (see computeCycleBudget's
+// `cycleHasEnded` and CycleView's 钱去哪里了 pie) — a cycle needs no separate
+// "结算" stamp, only its own `end` date compared against today. `todayStr` is
+// passed explicitly throughout so these stay correct on whatever real day
+// this suite happens to run.
+const augustCycle = getCycle(on(2026, 8, 15));
+check('a cycle is not over while today is still inside it',
+  hasCycleEnded(augustCycle, '2026-08-20'), false);
+check('...not even on its very last day',
+  hasCycleEnded(augustCycle, '2026-08-31'), false);
+check('a cycle ends the instant its own `end` date arrives',
+  hasCycleEnded(augustCycle, '2026-09-01'), true);
+check('...and stays ended for good after that',
+  hasCycleEnded(augustCycle, '2027-01-01'), true);
+check('a cycle from the future has obviously not ended yet',
+  hasCycleEnded(augustCycle, '2026-01-01'), false);
 
 // --- boundaries ------------------------------------------------------------
 check('year rollover: 5 Jan is January, not last December',

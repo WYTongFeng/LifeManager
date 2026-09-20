@@ -8,7 +8,7 @@ import { useLiveJSON, useToday, saveJSON, loadJSON } from '../utils/storage';
 import { num, newId } from '../utils/num';
 import { describeDate } from '../utils/datetime';
 import {
-  getCycle, computeCycleBudget, isInCycle, getPreviousCycle, grossSpentByDayIndex,
+  getCycle, computeCycleBudget, isInCycle, getPreviousCycle, grossSpentByDayIndex, hasCycleEnded,
 } from '../utils/cycle';
 import {
   FREQUENCIES, frequencyMeta, normalizeAllocation, cycleCost, isEstimated,
@@ -335,15 +335,21 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
         value: num(a.budgeted),
       })),
       ...autoAllocations.map(a => ({ key: a.id, label: a.label, value: num(a.amount) })),
-      // ...and a 共摊本 that came out negative IS such a claim — it is inside
-      // `committed` — so it needs a slice of its own or the circle silently
-      // under-reports by the amount he actually paid for the shared bills.
-      // A positive net is income, not a claim, and belongs nowhere in here.
-      ...shareCycles.filter(t => t.isSpend).map(t => ({
+      // ...and, once the CYCLE has ended, a 共摊本 that came out negative IS
+      // such a claim — it is inside `committed` at that point — so it needs a
+      // slice of its own or the circle silently under-reports by the amount
+      // he actually paid for the shared bills. A positive net is income, not
+      // a claim, and belongs nowhere in here.
+      //
+      // While the cycle is still LIVE, computeCycleBudget deliberately leaves
+      // the net out of `committed` — so the same gate has to apply here, or
+      // this circle would claim a share of income the number sitting right
+      // above it says hasn't been touched yet.
+      ...(hasCycleEnded(cycle) ? shareCycles.filter(t => t.isSpend).map(t => ({
         key: `share:${t.id}`,
         label: t.label,
         value: t.ownShare,
-      })),
+      })) : []),
       ...cycleCategoryBreakdown.map(c => ({
         key: `cat:${c.category}`,
         // The category's own name, in Chinese, resolved through the same table
@@ -371,7 +377,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
     }
     return slices;
   }, [manualAllocations, autoAllocations, shareCycles, cycleCategoryBreakdown, budget.available,
-    cycle.start, todayStr, categoryPrefs, cycleOwnSpendMap]);
+    cycle, todayStr, categoryPrefs, cycleOwnSpendMap]);
 
   // --- debt: this cycle's plan, and logging a repayment ---------------------
   //

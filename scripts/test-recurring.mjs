@@ -5,7 +5,7 @@ import {
   normalizeAllocation, dueDatesBetween, nextDueDate, daysUntilDue,
   cycleCost, upcoming, totalBudgeted, totalCharged, chargedByAccount,
   occurrencesPerYear, isSkippedInCycle, isSkippedForCycleStart,
-  setCycleSkip, setCycleActual,
+  setCycleSkip, setCycleActual, detachCyclePayment,
 } from '../src/utils/recurring.js';
 import { getCycle } from '../src/utils/cycle.js';
 
@@ -192,6 +192,35 @@ const cleared = setCycleActual(confirmed, 10, '2026-09-01', '');
 check('an empty value clears it and hands the cycle back to the estimate',
   r2(cycleCost(cleared[0], nextCycle).charged), 250);
 check('...leaving other cycles alone', cleared[0].actuals, { '2026-08-01': 312.40 });
+
+// --- un-claiming a payment (归类中心 moving a bill into a 共摊本) -----------
+const rentBill = { id: 1, label: '房租', amount: 2000, frequency: 'monthly', dueDay: 5, paidFor: '2026-09-01' };
+const soloDetach = detachCyclePayment([rentBill], 1, '2026-09-01', 0);
+check('the only payment leaving clears the paid stamp', soloDetach[0].paidFor, undefined);
+
+const sharedBill = { ...rentBill };
+const stillOwed = detachCyclePayment([sharedBill], 1, '2026-09-01', 500);
+check('another payment still linked keeps a fixed bill marked paid', stillOwed[0].paidFor, '2026-09-01');
+
+const variableBill = {
+  id: 2, label: '水电', amount: 0, variable: true, frequency: 'monthly', dueDay: 10,
+  paidFor: '2026-09-01', actuals: { '2026-09-01': 312.40, '2026-08-01': 288.15 },
+};
+const variableSolo = detachCyclePayment([variableBill], 2, '2026-09-01', 0);
+check('a variable bill with nothing left this cycle loses just that cycle\'s actual',
+  variableSolo[0].actuals, { '2026-08-01': 288.15 });
+check('...and its paid stamp too', variableSolo[0].paidFor, undefined);
+
+const variableShared = detachCyclePayment([variableBill], 2, '2026-09-01', 120.40);
+check('a variable bill with a remainder shrinks to that remainder',
+  variableShared[0].actuals, { '2026-09-01': 120.40, '2026-08-01': 288.15 });
+check('...and stays marked paid', variableShared[0].paidFor, '2026-09-01');
+
+check('a stamp from a DIFFERENT cycle survives a detach for this one',
+  detachCyclePayment([{ ...rentBill, paidFor: '2026-08-01' }], 1, '2026-09-01', 0)[0].paidFor,
+  '2026-08-01');
+check('detaching an unrelated id leaves the allocation untouched',
+  detachCyclePayment([rentBill], 99, '2026-09-01', 0)[0], rentBill);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
