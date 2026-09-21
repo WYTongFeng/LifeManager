@@ -11,6 +11,7 @@
 import {
   inShareTab, tabRecords, tabCycle, tabsForCycle, budgetLinesForCycle,
   contributors, outgoings, isSettled, setSettled, unsettledCycles, settledCycles,
+  addTabBill, updateTabBill, removeTabBill, billsStatus,
 } from '../src/utils/shareTabs.js';
 import { getCycle, getPreviousCycle, computeCycleBudget } from '../src/utils/cycle.js';
 import { isDailySpend, isRealSpend, isSpendingRecord } from '../src/utils/accounts.js';
@@ -273,6 +274,44 @@ near('...still carrying its net, so 取消结算 can show what it is undoing',
 check('settled and unsettled are always a strict partition of the same history',
   unsettledCycles(stamped[0], settleData, liveCycle).length + settledList.length,
   unsettledCycles(tab, settleData, liveCycle).length);
+
+// --- a tab's own bills: what replaces 固定月费 for things inside the tab ---
+const withBill = addTabBill([tab], tab.id, { id: 'b1', label: '房租', amount: 2000, dueDay: 5 });
+check('adding a bill leaves the original tab untouched', tab.bills, undefined);
+check('...and appears on the returned copy', withBill[0].bills, [{ id: 'b1', label: '房租', amount: 2000, dueDay: 5 }]);
+
+const twoBills = addTabBill(withBill, tab.id, { id: 'b2', label: 'Spotify', amount: 26.90, dueDay: 1 });
+check('a second bill is appended, not replacing the first', twoBills[0].bills.length, 2);
+
+const renamed = updateTabBill(twoBills, tab.id, 'b1', { amount: 2100 });
+check('editing a bill changes only that field', renamed[0].bills.find(b => b.id === 'b1').amount, 2100);
+check('...leaving its label alone', renamed[0].bills.find(b => b.id === 'b1').label, '房租');
+check('...and the other bill on the tab untouched', renamed[0].bills.find(b => b.id === 'b2').amount, 26.90);
+check('editing an unknown bill id is a no-op', updateTabBill(twoBills, tab.id, 'nope', { amount: 1 })[0].bills, twoBills[0].bills);
+
+const oneLeft = removeTabBill(twoBills, tab.id, 'b2');
+check('removing a bill drops just that one', oneLeft[0].bills.map(b => b.id), ['b1']);
+
+check('a tab with no bills array reports none', billsStatus(tab, sept, cycle), []);
+
+const billTab = twoBills[0];
+const unpaidStatus = billsStatus(billTab, sept, cycle);
+check('an unlinked payment does not mark a bill paid — sept has 房租 but no shareTabBillId',
+  unpaidStatus.find(b => b.id === 'b1').paid, false);
+
+const paidThisCycle = [
+  ...sept,
+  { id: 999, date: '2026-09-05', merchant: '房租', amount: 2100, shareTabId: tab.id, shareTabBillId: 'b1' },
+];
+const paidStatus = billsStatus(billTab, paidThisCycle, cycle);
+check('a record carrying this bill\'s id marks it paid', paidStatus.find(b => b.id === 'b1').paid, true);
+check('...and the linked record is the one reported back',
+  paidStatus.find(b => b.id === 'b1').paidRecord.id, 999);
+check('the other bill on the same tab is unaffected', paidStatus.find(b => b.id === 'b2').paid, false);
+check('a different cycle sees no payment at all',
+  billsStatus(billTab, paidThisCycle, next).find(b => b.id === 'b1').paid, false);
+check('removed bills are simply absent from status, not reported broken',
+  billsStatus(oneLeft[0], paidThisCycle, cycle).map(b => b.id), ['b1']);
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : fail + ' FAILED'}  (${pass} passed)`);
 if (fail > 0) process.exit(1);

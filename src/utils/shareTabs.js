@@ -219,3 +219,60 @@ export function unsettledCycles(tab, expenses = [], liveCycle, maxBack = 12) {
 export function settledCycles(tab, expenses = [], liveCycle, maxBack = 12) {
   return tabCycleHistory(tab, expenses, liveCycle, maxBack).filter(c => c.settled);
 }
+
+// --- a tab's own bills — what replaces 固定月费 for the things inside it ----
+//
+// Before this, 房租/Time/Spotify had to live as ordinary 固定月费 allocations
+// even after their payments moved into a 共摊本 — the "几号交" reminder had
+// nowhere else to be. A tab bill is that reminder, moved: `{id, label,
+// amount, dueDay}`, always monthly, always simple — none of an allocation's
+// frequency/variable/custodial machinery, because none of it applies to
+// something whose whole cost is about to be netted against housemates
+// anyway. It reserves nothing on its own; see computeCycleBudget, which
+// never looks at `bills` at all — only the tab's NET still reaches the
+// budget, same as ever.
+
+/** Add one bill to a tab. Returns a new tabs array; never mutates. */
+export function addTabBill(tabs = [], tabId, bill) {
+  return tabs.map(t => (String(t.id) === String(tabId)
+    ? { ...t, bills: [...(t.bills ?? []), bill] }
+    : t));
+}
+
+/** Edit one bill on a tab by id. Unknown ids are a no-op. */
+export function updateTabBill(tabs = [], tabId, billId, patch) {
+  return tabs.map(t => (String(t.id) === String(tabId)
+    ? { ...t, bills: (t.bills ?? []).map(b => (String(b.id) === String(billId) ? { ...b, ...patch } : b)) }
+    : t));
+}
+
+/**
+ * Remove one bill from a tab. Expenses already logged against it (via
+ * `shareTabBillId`) are left exactly as they are — same as an allocation
+ * deleted out from under a payment that already claimed it (cycle.js's
+ * `liveAllocationIds`), a dangling id is not something anything here rewrites
+ * to cover up; `billsStatus` below simply never mentions a bill that is gone.
+ */
+export function removeTabBill(tabs = [], tabId, billId) {
+  return tabs.map(t => (String(t.id) === String(tabId)
+    ? { ...t, bills: (t.bills ?? []).filter(b => String(b.id) !== String(billId)) }
+    : t));
+}
+
+/**
+ * Each of a tab's bills, with whether THIS cycle's payment has been logged
+ * against it yet.
+ *
+ * "Paid" is derived, the same way a 固定月费's `paidFor` really means "a
+ * linked expense exists this cycle" underneath — asked by looking for a
+ * tabbed record carrying this bill's id, not stored as a flag that could
+ * fall out of step with the ledger itself.
+ */
+export function billsStatus(tab, expenses = [], cycle) {
+  const bills = Array.isArray(tab?.bills) ? tab.bills : [];
+  const rows = tabRecords(tab, expenses, cycle);
+  return bills.map(bill => {
+    const paidRecord = rows.find(e => String(e.shareTabBillId) === String(bill.id)) ?? null;
+    return { ...bill, paid: paidRecord != null, paidRecord };
+  });
+}

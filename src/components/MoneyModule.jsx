@@ -37,6 +37,7 @@ import { setCycleActual } from '../utils/recurring';
 import { tabsForCycle, contributors, outgoings } from '../utils/shareTabs';
 import ReclassifyCenter from './ReclassifyCenter';
 import ShareTabSettle from './ShareTabSettle';
+import ShareTabBills from './ShareTabBills';
 import { OWNERSHIP } from '../utils/recordOwnership';
 
 const inputStyle = {
@@ -217,6 +218,11 @@ export default function MoneyModule({
   // money comes into it, and both have to be able to say so.
   const [formShareTabId, setFormShareTabId] = useState('');
   const [formNewShareTab, setFormNewShareTab] = useState('');
+  // Which of the tab's OWN bills (ShareTabBills.jsx) this payment settles, if
+  // any — set only via that screen's 记这笔 shortcut, never a dropdown in
+  // this form itself. Lets 「房租 5号」 read 已付 the moment this saves,
+  // the same way `allocationId` does for a plain 固定月费.
+  const [formShareTabBillId, setFormShareTabBillId] = useState('');
   // 「这笔每个月都有」. Creating a 固定月费 needed a trip to 本月 and back, which
   // is one screen too many at the moment you notice you have one — the day you
   // pay it IS when you know. `formBillDueDay` is the only thing the ledger
@@ -259,9 +265,15 @@ export default function MoneyModule({
   const liveToday = useToday();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const moneyCycle = useMemo(() => getCycle(), [liveToday]);
+  // A tab with real activity shows regardless; one with NONE this cycle only
+  // shows if it has bills defined — those are worth seeing (and adding to,
+  // and due-date-reminding about) before a payment ever lands, not just
+  // after. Otherwise a brand-new tab has nowhere to even reach 「+加」 for its
+  // first bill — see ShareTabBills.jsx.
   const shareCycles = useMemo(
     () => tabsForCycle(shareTabs, allExpenses ?? expenses, moneyCycle)
-      .filter(t => t.rows.length > 0),
+      .filter(t => t.rows.length > 0
+        || shareTabs.find(st => String(st.id) === String(t.id))?.bills?.length > 0),
     [shareTabs, allExpenses, expenses, moneyCycle]
   );
   const projectsById = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
@@ -526,6 +538,7 @@ export default function MoneyModule({
     setFormAllocationId('');
     setFormShareTabId('');
     setFormNewShareTab('');
+    setFormShareTabBillId('');
     setFormNewBill(false);
     setFormBillDueDay('');
   };
@@ -583,8 +596,26 @@ export default function MoneyModule({
     setFormAllocationId(expense.allocationId != null ? String(expense.allocationId) : '');
     setFormShareTabId(expense.shareTabId != null ? String(expense.shareTabId) : '');
     setFormNewShareTab('');
+    setFormShareTabBillId(expense.shareTabBillId != null ? String(expense.shareTabBillId) : '');
     setFormNewBill(false);
     setFormBillDueDay('');
+    setShowEntryModal(true);
+  };
+
+  // Opened from ShareTabBills' 记这笔 — a bill's due amount and label become
+  // the starting point for an ordinary expense, pre-linked to both the tab
+  // and the specific bill, so saving it is the same one statement that marks
+  // the bill 已付.
+  const openLogBillModal = (tab, bill) => {
+    resetForm();
+    setFormMerchant(bill.label);
+    // Same lookup handleMerchantChange runs on every keystroke while typing —
+    // a bill logged this way deserves the same learned-category guess a
+    // manually-typed one gets, not a silent fall-back to 其他.
+    setFormCategory(categorise(bill.label, learned));
+    setFormAmount(String(bill.amount));
+    setFormShareTabId(String(tab.id));
+    setFormShareTabBillId(String(bill.id));
     setShowEntryModal(true);
   };
 
@@ -736,6 +767,10 @@ export default function MoneyModule({
     } else if (shareTabId === '__new') {
       shareTabId = null;
     }
+    // Only meaningful attached to the tab it names — dropping the tab (or
+    // never picking one) must drop the bill link with it, not leave a
+    // shareTabBillId pointing nowhere once shareTabId itself is null.
+    const shareTabBillId = shareTabId ? (formShareTabBillId || null) : null;
 
     // onSaveExpense, not setExpenses. `setExpenses` can only write today by
     // construction (useTodayRecords in App.jsx), so saving a record dated
@@ -756,6 +791,7 @@ export default function MoneyModule({
       incomeSourceId,
       allocationId,
       shareTabId,
+      shareTabBillId,
       // Stamped at birth, same as makeTransfer and makeRepayment do. `txType`
       // would derive the same answer from the flags either way — that fallback
       // is permanent — but a record that says what it is beats one that has to
@@ -1365,6 +1401,9 @@ export default function MoneyModule({
             {shareCycles.map(t => {
               const paidBy = contributors({ id: t.id }, allExpenses ?? expenses, moneyCycle);
               const bills = outgoings({ id: t.id }, allExpenses ?? expenses, moneyCycle);
+              // `t` is the resolved cycle (net, rows, …) — ShareTabBills needs
+              // the raw tab object underneath it for its own `.bills` list.
+              const rawTab = shareTabs.find(st => String(st.id) === String(t.id));
               return (
                 <div key={t.id} className="glass-card" style={{ padding: '0.85rem 1rem' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
@@ -1441,6 +1480,16 @@ export default function MoneyModule({
                   >
                     把已经记过的归进来 →
                   </button>
+
+                  {rawTab && (
+                    <ShareTabBills
+                      tab={rawTab}
+                      shareTabs={shareTabs}
+                      expenses={allExpenses ?? expenses}
+                      cycle={moneyCycle}
+                      onLogBill={openLogBillModal}
+                    />
+                  )}
                 </div>
               );
             })}
@@ -2302,6 +2351,12 @@ export default function MoneyModule({
                     // exclusive with, so a state that was legal a moment ago
                     // cannot survive into the saved record.
                     if (e.target.value) { setFormAllocationId(''); setFormIsProject(false); }
+                    // A bill link only ever means anything for the exact tab
+                    // it came from (see openLogBillModal) — changing the tab
+                    // here, including switching to a different one, drops it
+                    // rather than let it silently point at the wrong tab's
+                    // bill, or a bill at all once "不用" is chosen.
+                    setFormShareTabBillId('');
                   }}
                   style={inputStyle}
                 >
