@@ -40,7 +40,7 @@
 // books to keep in step with the first.
 
 import { num, sumBy } from './num.js';
-import { isInCycle } from './cycle.js';
+import { isInCycle, getPreviousCycle } from './cycle.js';
 
 /** Is this record filed under a share tab? Then it never counts on its own. */
 export function inShareTab(expense) {
@@ -133,4 +133,89 @@ export function outgoings(tab, expenses = [], cycle) {
   return tabRecords(tab, expenses, cycle)
     .filter(e => num(e.amount) > 0)
     .sort((a, b) => num(b.amount) - num(a.amount));
+}
+
+// --- 结算 — acknowledging a cycle that has already settled itself ----------
+//
+// computeCycleBudget (cycle.js) needs no stamp at all: a cycle past its own
+// `end` folds its net into the budget automatically, the instant it's over.
+// So NOTHING here gates any arithmetic. What this section exists for is a
+// narrower, purely human question — "have I actually LOOKED at what last
+// month's tab came to" — because a net that quietly becomes true in the
+// background is exactly the kind of thing this whole app exists to surface,
+// not hide. His own words: "可以有一些手动确认的吗，我比较安心一点".
+//
+// The stamp lives ON THE TAB (`tab.settled[cycleStart]`), the same shape
+// recurring.js already uses for `actuals`/`skipped` — one more field on an
+// object already synced, not a new persisted key needing its own
+// registration. See syncModel.js's META_DOCS and the sync-registration-
+// required lesson this sidesteps by construction.
+
+/** Has this tab's cycle been acknowledged? */
+export function isSettled(tab, cycleStart) {
+  return tab?.settled?.[cycleStart] != null;
+}
+
+/**
+ * Stamp (or un-stamp) one cycle as acknowledged. Returns a new tabs array;
+ * never mutates. Unsettling is a real, supported way back — pressing 就这样结
+ * by mistake, or wanting to look at the breakdown again, must not be a
+ * one-way door.
+ */
+export function setSettled(tabs = [], tabId, cycleStart, settled) {
+  return tabs.map(t => {
+    if (String(t.id) !== String(tabId)) return t;
+    const next = { ...(t.settled ?? {}) };
+    if (settled) next[cycleStart] = Date.now();
+    else delete next[cycleStart];
+    return { ...t, settled: next };
+  });
+}
+
+/**
+ * Every ended cycle this tab actually had activity in, most recent first,
+ * each carrying whether it's been acknowledged — the shared walk behind
+ * `unsettledCycles` and `settledCycles` below.
+ *
+ * Walks backward from the cycle before `liveCycle` (the current one is never
+ * settleable — it hasn't ended, by construction, as long as the caller passes
+ * a genuine "now" cycle — every screen that calls this gets one from
+ * `getCycle()`) and stops at the first EMPTY cycle: a tab that collected
+ * nothing that far back has nothing further back worth surfacing either, so a
+ * tab created last week doesn't make this scan crawl through years of cycles
+ * that never had it. `maxBack` is a second, smaller safety net for the same
+ * reason debts.js's repaymentOutlook caps at 12.
+ */
+function tabCycleHistory(tab, expenses, liveCycle, maxBack) {
+  const out = [];
+  let cursor = getPreviousCycle(liveCycle);
+  for (let i = 0; i < maxBack; i++) {
+    const resolved = tabCycle(tab, expenses, cursor);
+    if (resolved.rows.length === 0) break;
+    out.push({
+      ...resolved,
+      cycleStart: cursor.start,
+      cycleEnd: cursor.end,
+      settled: isSettled(tab, cursor.start),
+    });
+    cursor = getPreviousCycle(cursor);
+  }
+  return out;
+}
+
+/**
+ * Ended cycles with real activity that haven't been acknowledged yet — most
+ * recent first. This is what the 就这样结 banner lists.
+ */
+export function unsettledCycles(tab, expenses = [], liveCycle, maxBack = 12) {
+  return tabCycleHistory(tab, expenses, liveCycle, maxBack).filter(c => !c.settled);
+}
+
+/**
+ * Ended cycles already acknowledged, within the same lookback window — what
+ * a 取消结算 control lists, so settling one is never a one-way door just
+ * because the banner that offered it has already gone quiet.
+ */
+export function settledCycles(tab, expenses = [], liveCycle, maxBack = 12) {
+  return tabCycleHistory(tab, expenses, liveCycle, maxBack).filter(c => c.settled);
 }

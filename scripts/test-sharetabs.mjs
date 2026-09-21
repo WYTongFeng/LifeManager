@@ -10,9 +10,9 @@
 
 import {
   inShareTab, tabRecords, tabCycle, tabsForCycle, budgetLinesForCycle,
-  contributors, outgoings,
+  contributors, outgoings, isSettled, setSettled, unsettledCycles, settledCycles,
 } from '../src/utils/shareTabs.js';
-import { getCycle, computeCycleBudget } from '../src/utils/cycle.js';
+import { getCycle, getPreviousCycle, computeCycleBudget } from '../src/utils/cycle.js';
 import { isDailySpend, isRealSpend, isSpendingRecord } from '../src/utils/accounts.js';
 import { getProjects } from '../src/utils/projects.js';
 
@@ -211,6 +211,68 @@ const mixed = computeCycleBudget({
 near('a bill on his own account still counts, unchanged', mixed.committed, 55);
 near('...and the two are reported apart', mixed.custodialCommitted, 2000);
 near('...and 花掉的 is untouched by either', mixed.grossSpentThisCycle, 0);
+
+// --- 结算: acknowledging a cycle that already settled itself ---------------
+// No arithmetic depends on any of this — computeCycleBudget above already
+// settles an ended cycle's net on its own, purely from `cycle.end`. This is
+// only "has he actually looked", tracked as his own explicit ask.
+const liveCycle = getCycle();
+const prevCycle = getPreviousCycle(liveCycle);
+const twoBackCycle = getPreviousCycle(prevCycle);
+
+check('a tab with no `settled` field is unsettled everywhere',
+  isSettled(tab, prevCycle.start), false);
+
+const stamped = setSettled([tab], tab.id, prevCycle.start, true);
+check('settling stamps a timestamp, not just `true`',
+  typeof stamped[0].settled[prevCycle.start], 'number');
+check('...and isSettled reads it back', isSettled(stamped[0], prevCycle.start), true);
+check('a DIFFERENT cycle on the same tab is untouched',
+  isSettled(stamped[0], twoBackCycle.start), false);
+check('the original tab object is never mutated', tab.settled, undefined);
+
+const unstamped = setSettled(stamped, tab.id, prevCycle.start, false);
+check('un-settling is a real way back, not a dead end',
+  isSettled(unstamped[0], prevCycle.start), false);
+
+check('settling a different tab in the list leaves this one alone',
+  isSettled(setSettled([tab, { id: 'other' }], 'other', prevCycle.start, true)[0], prevCycle.start),
+  false);
+
+// A tab with real activity two cycles back, nothing further back than that —
+// the walk has to find the one with activity and stop at the empty one
+// beyond it, not report every cycle in between as "unsettled".
+const settleData = [
+  { id: 901, date: prevCycle.start, merchant: '房租', amount: 2000, shareTabId: tab.id },
+  { id: 902, date: prevCycle.start, merchant: '阿明', amount: -800, shareTabId: tab.id },
+];
+const unsettled = unsettledCycles(tab, settleData, liveCycle);
+check('the one ended cycle with real activity is surfaced',
+  unsettled.map(c => c.cycleStart), [prevCycle.start]);
+near('...carrying its own net', unsettled[0].net, -1200);
+check('...and stops at the empty cycle beyond it, not walking further back',
+  unsettled.length, 1);
+
+const alreadyDone = unsettledCycles(stamped[0], settleData, liveCycle);
+check('once settled, it drops off the list entirely', alreadyDone, []);
+
+check('a tab with nothing anywhere has nothing to settle',
+  unsettledCycles(tab, [], liveCycle), []);
+
+check('maxBack of 0 finds nothing regardless of what is actually there',
+  unsettledCycles(tab, settleData, liveCycle, 0), []);
+
+// The undo side: 取消结算 needs somewhere to find what was settled, not just
+// a toast that vanishes the moment the banner does.
+check('nothing settled yet, so nothing to undo', settledCycles(tab, settleData, liveCycle), []);
+const settledList = settledCycles(stamped[0], settleData, liveCycle);
+check('once settled, it is exactly what 取消结算 lists',
+  settledList.map(c => c.cycleStart), [prevCycle.start]);
+near('...still carrying its net, so 取消结算 can show what it is undoing',
+  settledList[0].net, -1200);
+check('settled and unsettled are always a strict partition of the same history',
+  unsettledCycles(stamped[0], settleData, liveCycle).length + settledList.length,
+  unsettledCycles(tab, settleData, liveCycle).length);
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : fail + ' FAILED'}  (${pass} passed)`);
 if (fail > 0) process.exit(1);

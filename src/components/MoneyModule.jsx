@@ -36,6 +36,7 @@ import { getCycle } from '../utils/cycle';
 import { setCycleActual } from '../utils/recurring';
 import { tabsForCycle, contributors, outgoings } from '../utils/shareTabs';
 import ReclassifyCenter from './ReclassifyCenter';
+import ShareTabSettle from './ShareTabSettle';
 import { OWNERSHIP } from '../utils/recordOwnership';
 
 const inputStyle = {
@@ -1345,6 +1346,13 @@ export default function MoneyModule({
           </div>
         </div>
       )}
+
+      {/* 结算 — a cycle that's ended settles itself in the arithmetic the
+          instant it's over (see hasCycleEnded in cycle.js); this is just the
+          acknowledgment sitting on top, his own explicit ask. Placed ABOVE
+          the live 共摊本 cards below: it's about a cycle that's already
+          finished, not the one still running underneath it. */}
+      <ShareTabSettle shareTabs={shareTabs} expenses={allExpenses ?? expenses} cycle={moneyCycle} />
 
       {/* 共摊本 — the running tab. Deliberately NOT scoped to today, and
           deliberately shown as ONE net figure with the two gross halves under
