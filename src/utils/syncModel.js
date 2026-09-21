@@ -36,7 +36,11 @@ export const DAILY_STATS_LOCAL_KEY = 'history';
  */
 export const META_DOCS = {
   settings: ['calorieLimit', 'macroTargets', 'dailyBudget', 'userName', 'clipboardWatchEnabled', 'bodyWeightKg', 'weightUnit', 'ageYears', 'heightCm', 'sex', 'activityLevel', 'dietGoal', 'autoCalorieTarget', 'workoutPlace'],
-  merchants: ['merchantCategories'],
+  // merchantShareTabs: the same idea as merchantCategories, one door down —
+  // which 共摊本 a merchant usually belongs to, learned the same way. See
+  // MoneyModule's teachShareTab and "suggest, don't decide" — a match here
+  // pre-fills the form's 共摊本 field rather than deciding it silently.
+  merchants: ['merchantCategories', 'merchantShareTabs'],
   accounts: ['accounts'],
   debts: ['debts', 'debtPlan'],
   routines: ['routines'],

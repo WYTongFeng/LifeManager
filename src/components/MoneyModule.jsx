@@ -101,6 +101,13 @@ export default function MoneyModule({
   // Merchant -> category, learned from your own corrections. Every expense you
   // save teaches this map, and it outranks the parser's built-in keyword rules.
   const [learned, setLearned] = usePersistentState('merchantCategories', {});
+  // Merchant -> 共摊本, the same idea one door down. "Spotify" and "阿强" are
+  // filed under the same tab basically every time — this is what lets the
+  // form stop asking once it's seen that once, instead of asking on every
+  // single record forever. See M58's 表单瘦身 and "suggest, don't decide":
+  // a match here pre-fills, it never silently decides — the field is still
+  // right there to change your mind.
+  const [merchantShareTabs, setMerchantShareTabs] = usePersistentState('merchantShareTabs', {});
 
   // Owned by AccountsView, read live here — a balance edited two screens away
   // has to be right the moment you open the expense form, or you'd be choosing
@@ -218,6 +225,16 @@ export default function MoneyModule({
   // money comes into it, and both have to be able to say so.
   const [formShareTabId, setFormShareTabId] = useState('');
   const [formNewShareTab, setFormNewShareTab] = useState('');
+  // Has THIS form session touched the 共摊本 field by hand? Gates the
+  // merchant-memory auto-suggest below: it fills in a guess once, the moment
+  // the merchant is typed, and then gets out of the way — it must never
+  // fight a deliberate choice on every subsequent keystroke.
+  const [formShareTabTouched, setFormShareTabTouched] = useState(false);
+  // Whether the 共摊本 picker is showing at all. Collapsed by default so
+  // ordinary spending never has to look at it (his ask: 「日常记一笔只剩：
+  // 金额·商家·分类·户口」) — expands on a merchant-memory match (with the
+  // match named, not just silently applied) or a manual tap.
+  const [formShareTabExpanded, setFormShareTabExpanded] = useState(false);
   // Which of the tab's OWN bills (ShareTabBills.jsx) this payment settles, if
   // any — set only via that screen's 记这笔 shortcut, never a dropdown in
   // this form itself. Lets 「房租 5号」 read 已付 the moment this saves,
@@ -517,6 +534,17 @@ export default function MoneyModule({
     setLearned(prev => (prev[key] === category ? prev : { ...prev, [key]: category }));
   };
 
+  // Only ever teaches a POSITIVE association — saving a plain record never
+  // erases an existing one. The same merchant meaning two different things
+  // on two different days is the rare case; wiping out a mapping that was
+  // right the other 29 times, because this one record happened not to use
+  // it, would be the wrong failure mode to optimise against.
+  const teachShareTab = (merchant, shareTabId) => {
+    const key = merchantKey(merchant);
+    if (!key || !shareTabId) return;
+    setMerchantShareTabs(prev => (prev[key] === shareTabId ? prev : { ...prev, [key]: shareTabId }));
+  };
+
   const resetForm = () => {
     setEditingId(null);
     setFormMerchant('');
@@ -539,6 +567,8 @@ export default function MoneyModule({
     setFormShareTabId('');
     setFormNewShareTab('');
     setFormShareTabBillId('');
+    setFormShareTabTouched(false);
+    setFormShareTabExpanded(false);
     setFormNewBill(false);
     setFormBillDueDay('');
   };
@@ -597,6 +627,13 @@ export default function MoneyModule({
     setFormShareTabId(expense.shareTabId != null ? String(expense.shareTabId) : '');
     setFormNewShareTab('');
     setFormShareTabBillId(expense.shareTabBillId != null ? String(expense.shareTabBillId) : '');
+    // Editing counts as "touched" regardless of whether this record happens
+    // to carry a tab — re-typing the merchant while fixing a typo must not
+    // suddenly apply a guess neither this record's own history nor this edit
+    // asked for. Expanded whenever there's something to show, collapsed when
+    // there truly is nothing (an ordinary record staying ordinary).
+    setFormShareTabTouched(true);
+    setFormShareTabExpanded(expense.shareTabId != null);
     setFormNewBill(false);
     setFormBillDueDay('');
     setShowEntryModal(true);
@@ -616,6 +653,11 @@ export default function MoneyModule({
     setFormAmount(String(bill.amount));
     setFormShareTabId(String(tab.id));
     setFormShareTabBillId(String(bill.id));
+    // Explicit, not a guess — shown expanded so the link is visible before
+    // saving, and marked touched so typing/adjusting the merchant afterward
+    // can't get second-guessed by a merchant-memory match.
+    setFormShareTabTouched(true);
+    setFormShareTabExpanded(true);
     setShowEntryModal(true);
   };
 
@@ -629,6 +671,19 @@ export default function MoneyModule({
   const handleMerchantChange = (value) => {
     setFormMerchant(value);
     if (!editingId) setFormCategory(categorise(value, learned));
+    // Same guard as the category guess above, plus one more: only while the
+    // 共摊本 field hasn't been touched by hand yet this form session, so a
+    // match keeps re-applying while you're still typing the name but never
+    // fights a deliberate pick once you've made one. A match EXPANDS the
+    // field rather than only setting the id — the whole point is that this
+    // is a suggestion, visibly, not a silent decision. See "suggest, don't
+    // decide" and M58's 表单瘦身.
+    if (!editingId && !formShareTabTouched) {
+      const suggestion = merchantShareTabs[merchantKey(value)];
+      const stillLive = suggestion != null && shareTabs.some(t => String(t.id) === String(suggestion) && !t.archived);
+      setFormShareTabId(stillLive ? String(suggestion) : '');
+      setFormShareTabExpanded(stillLive);
+    }
   };
 
   const handleSubmitEntry = (e) => {
@@ -813,6 +868,7 @@ export default function MoneyModule({
     });
 
     teach(formMerchant, formCategory);
+    teachShareTab(formMerchant, shareTabId);
     resetForm();
     setShowEntryModal(false);
   };
@@ -2340,68 +2396,93 @@ export default function MoneyModule({
               {/* 共摊本. Offered on every direction, because a tab has two
                   sides: the bills leaving and the housemates' money arriving.
                   Nothing filed here counts on its own — only the tab's net for
-                  the month reaches the budget. See shareTabs.js. */}
+                  the month reaches the budget. See shareTabs.js.
+
+                  Collapsed to a small link by default — his ask, "日常记一笔
+                  只剩：金额·商家·分类·户口" — and expanded automatically the
+                  moment the merchant matches one you've filed this way
+                  before (handleMerchantChange), tab already picked, still
+                  free to change. A merchant with no history stays collapsed
+                  until tapped, for the rarer case of filing something new. */}
               <div>
-                <label style={labelStyle}>算进共摊本吗?</label>
-                <select
-                  value={formShareTabId}
-                  onChange={(e) => {
-                    setFormShareTabId(e.target.value);
-                    // Picking a tab clears the two things it is mutually
-                    // exclusive with, so a state that was legal a moment ago
-                    // cannot survive into the saved record.
-                    if (e.target.value) { setFormAllocationId(''); setFormIsProject(false); }
-                    // A bill link only ever means anything for the exact tab
-                    // it came from (see openLogBillModal) — changing the tab
-                    // here, including switching to a different one, drops it
-                    // rather than let it silently point at the wrong tab's
-                    // bill, or a bill at all once "不用" is chosen.
-                    setFormShareTabBillId('');
-                  }}
-                  style={inputStyle}
-                >
-                  <option value="">不用，普通一笔</option>
-                  {shareTabs.filter(t => !t.archived).map(t => (
-                    <option key={t.id} value={String(t.id)}>{t.label}</option>
-                  ))}
-                  <option value="__new">+ 开一个新的共摊本…</option>
-                </select>
-
-                {formShareTabId === '__new' && (
+                {!formShareTabExpanded ? (
+                  <button
+                    type="button"
+                    onClick={() => setFormShareTabExpanded(true)}
+                    style={{
+                      background: 'none', border: 'none', padding: 0,
+                      color: 'var(--text-muted)', fontSize: '0.68rem', cursor: 'pointer',
+                      textDecoration: 'underline',
+                    }}
+                  >
+                    算进共摊本?
+                  </button>
+                ) : (
                   <>
-                    <input
-                      type="text"
-                      placeholder="例：房友共摊"
-                      value={formNewShareTab}
-                      onChange={(e) => setFormNewShareTab(e.target.value)}
+                    <label style={labelStyle}>算进共摊本吗?</label>
+                    <select
+                      value={formShareTabId}
+                      onChange={(e) => {
+                        setFormShareTabId(e.target.value);
+                        setFormShareTabTouched(true);
+                        // Picking a tab clears the two things it is mutually
+                        // exclusive with, so a state that was legal a moment
+                        // ago cannot survive into the saved record.
+                        if (e.target.value) { setFormAllocationId(''); setFormIsProject(false); }
+                        // A bill link only ever means anything for the exact
+                        // tab it came from (see openLogBillModal) — changing
+                        // the tab here, including switching to a different
+                        // one, drops it rather than let it silently point at
+                        // the wrong tab's bill, or a bill at all once "不用"
+                        // is chosen.
+                        setFormShareTabBillId('');
+                      }}
                       style={inputStyle}
-                    />
-                    <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '6px' }}>
-                      {['房友共摊', '家里共摊', '旅行共摊'].map(name => (
-                        <button
-                          key={name}
-                          type="button"
-                          onClick={() => setFormNewShareTab(name)}
-                          style={{
-                            padding: '4px 9px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-                            fontSize: '0.68rem',
-                            background: formNewShareTab === name ? 'var(--color-money-soft)' : 'var(--bg-input)',
-                            border: `1px solid ${formNewShareTab === name ? 'var(--color-money)' : 'var(--border-glass)'}`,
-                            color: formNewShareTab === name ? 'var(--color-money)' : 'var(--text-secondary)',
-                          }}
-                        >
-                          {name}
-                        </button>
+                    >
+                      <option value="">不用，普通一笔</option>
+                      {shareTabs.filter(t => !t.archived).map(t => (
+                        <option key={t.id} value={String(t.id)}>{t.label}</option>
                       ))}
-                    </div>
-                  </>
-                )}
+                      <option value="__new">+ 开一个新的共摊本…</option>
+                    </select>
 
-                {formShareTabId && (
-                  <p style={{ fontSize: '0.68rem', color: 'var(--color-money)', marginTop: '5px', lineHeight: 1.5 }}>
-                    这笔<strong>单独不算数</strong> —— 不算你花的，也不算你的收入。
-                    整本这个月「收到的 − 付出去的」才算：多的算收入，少的算支出。
-                  </p>
+                    {formShareTabId === '__new' && (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="例：房友共摊"
+                          value={formNewShareTab}
+                          onChange={(e) => setFormNewShareTab(e.target.value)}
+                          style={inputStyle}
+                        />
+                        <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '6px' }}>
+                          {['房友共摊', '家里共摊', '旅行共摊'].map(name => (
+                            <button
+                              key={name}
+                              type="button"
+                              onClick={() => setFormNewShareTab(name)}
+                              style={{
+                                padding: '4px 9px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                                fontSize: '0.68rem',
+                                background: formNewShareTab === name ? 'var(--color-money-soft)' : 'var(--bg-input)',
+                                border: `1px solid ${formNewShareTab === name ? 'var(--color-money)' : 'var(--border-glass)'}`,
+                                color: formNewShareTab === name ? 'var(--color-money)' : 'var(--text-secondary)',
+                              }}
+                            >
+                              {name}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+
+                    {formShareTabId && (
+                      <p style={{ fontSize: '0.68rem', color: 'var(--color-money)', marginTop: '5px', lineHeight: 1.5 }}>
+                        这笔<strong>单独不算数</strong> —— 不算你花的，也不算你的收入。
+                        整本这个月「收到的 − 付出去的」才算：多的算收入，少的算支出。
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
 
