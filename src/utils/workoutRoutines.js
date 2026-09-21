@@ -1,13 +1,10 @@
 // The training plan itself, as data.
 //
-// WHY THIS IS ITS OWN FILE NOW
-// These four splits used to be a hardcoded `DEFAULT_ROUTINES` array inside
-// SportsModule.jsx that the app invented — four plausible-looking gym days that
-// were not the user's actual programme. He has been training a real 4-day split
-// for weeks and the app was quietly disagreeing with him about what he does.
-//
-// So the plan lives here, verbatim from what he handed over, and the module
-// renders it rather than inventing it. Two shapes of the same four days:
+// WHY THIS IS ITS OWN FILE
+// The routines are the user's own programme, not something this app invented,
+// and he redesigns it from time to time (this is the second full rewrite). The
+// module renders whatever is here rather than inventing a plan of its own. Two
+// shapes of the same four days:
 //
 //   GYM_ROUTINES   the real thing, machines and free weights
 //   HOME_ROUTINES  the same four muscle groups with no equipment at all
@@ -16,87 +13,93 @@
 // rotation ("last time was back, so today is legs") runs inside a place,
 // because doing gym-back then home-legs is still legs day.
 //
-// EVERY EXERCISE CARRIES ITS REST TIME
-// The rest timer was hardcoded to 60 seconds for everything, which is wrong in
-// both directions: 60s is not enough after heavy incline press (needs 75) and
-// too much after a triceps pushdown (45). The whole point of this programme is
-// that it fits in 50 minutes, and it only fits if the rests are the ones
-// written down. So `restSec` is part of the exercise, not a global default.
+// EDITING THIS FILE IS NO LONGER HOW HE CHANGES HIS PLAN
+// This used to be the only way to change a routine's exercises, rest times or
+// notes — the in-app "新增菜单" form could only add a whole new routine from a
+// bare list of names. SportsModule now has a real per-exercise editor (name,
+// sets, reps, rest, notes, delete, add) on the plan screen, so a redesign like
+// this one goes straight into the app instead of waiting on a code change.
+// This file only supplies what the app ships with on first install.
+//
+// EVERY EXERCISE CARRIES ITS OWN REST TIME
+// A flat 60 seconds for everything is wrong in both directions: not enough
+// after a heavy compound lift, too much after a small isolation finisher. So
+// `restSec` is part of the exercise, not a global default.
 
 /** Warm-up before the working sets. Not logged as a set; it's part of the clock. */
 export const WARMUP_MIN = 3;
 
-/** Default reps per working set across this programme (~35s of work). */
+/** Default reps per working set when an exercise doesn't state its own. */
 export const DEFAULT_REPS = 12;
-
-/**
- * Ceiling on how long changing exercise / finding a machine should take.
- * Shown in the session screen as a nudge, not enforced — the app can't know
- * someone else is on the pec deck.
- */
-export const SWITCH_LIMIT_SEC = 60;
 
 // `mode: 'time'` marks a hold rather than a rep count (wall sit, plank). Those
 // log seconds instead of reps, and their calorie estimate uses the hold time
 // directly — counting a 45-second wall sit as "12 reps x 4s" would be fiction.
+//
+// `reps` below is the LOW end of the rep range he actually trains (e.g. "3 x
+// 6-10" becomes reps: 6) — the plan screen shows it as the starting target,
+// and the full range lives in `note`. The progression rule is his own: once
+// every set hits the top of the range, add weight and restart at the bottom.
 export const GYM_ROUTINES = [
   {
     id: 1,
     block: 1,
     place: 'gym',
-    name: '板块 1 · 胸 + 三头',
+    name: 'Day 1 · 胸 + 三头',
     focus: '胸肌 + 三头肌',
-    durationEst: '45 分钟',
+    durationEst: '50–53 分钟',
     exercises: [
-      { name: '上斜哑铃卧推', en: 'Incline Dumbbell Press', targetSets: 4, restSec: 75, reps: 12, note: '大重量主攻，需要充分恢复' },
-      { name: '推胸机', en: 'Chest Press Machine', targetSets: 4, restSec: 60, reps: 12, note: '固定轨迹，快速充血' },
-      { name: '蝴蝶机夹胸', en: 'Pec Deck Fly', targetSets: 4, restSec: 60, reps: 12, note: '孤立中缝，保持泵感' },
-      { name: '绳索过头臂屈伸', en: 'Overhead Cable Triceps Extension', targetSets: 4, restSec: 60, reps: 12 },
-      { name: '绳索三头下压', en: 'Cable Triceps Pushdown', targetSets: 4, restSec: 45, reps: 12, note: '收尾孤立小肌群，拉爆离场' },
+      { name: '上斜哑铃卧推', en: 'Incline Dumbbell Press', targetSets: 3, restSec: 120, reps: 6, note: '25–30 lb/手，大重量主攻，需要充分恢复' },
+      { name: '坐姿推胸机', en: 'Chest Press Machine', targetSets: 3, restSec: 90, reps: 8, note: '30kg，固定轨迹快速充血' },
+      { name: '蝴蝶机夹胸', en: 'Pec Deck Fly', targetSets: 3, restSec: 60, reps: 10, note: '30kg，孤立中缝' },
+      { name: '绳索过头三头伸展', en: 'Overhead Cable Triceps Extension', targetSets: 3, restSec: 60, reps: 10, note: '30kg' },
+      { name: '绳索三头下压', en: 'Cable Triceps Pushdown', targetSets: 2, restSec: 60, reps: 10, note: '25kg，收尾拉爆离场' },
     ],
   },
   {
     id: 2,
     block: 2,
     place: 'gym',
-    name: '板块 2 · 背 + 二头',
+    name: 'Day 2 · 背 + 二头',
     focus: '背部 + 二头肌',
-    durationEst: '46 分钟',
+    durationEst: '50–53 分钟',
     exercises: [
-      { name: '高位下拉', en: 'Lat Pulldown', targetSets: 4, restSec: 75, reps: 12 },
-      { name: '俯身杠铃划船', en: 'Barbell Row', targetSets: 3, restSec: 90, reps: 12, note: '复合大动作，护好腰，给够休息' },
-      { name: '坐姿绳索划船', en: 'Seated Cable Row', targetSets: 4, restSec: 60, reps: 12 },
-      { name: '站姿杠铃弯举', en: 'Barbell Biceps Curl', targetSets: 4, restSec: 60, reps: 12 },
-      { name: '哑铃锤式弯举', en: 'Dumbbell Hammer Curl', targetSets: 3, restSec: 45, reps: 12, note: '锤爆侧面，做完闪人' },
+      { name: '标准引体向上', en: 'Pull-up', targetSets: 3, restSec: 120, reps: 3, note: '自重，最多约5个；第一组不到3个就取消，Lat Pulldown 直接做 4 组 × 8–12' },
+      { name: '杠铃（Smith）俯身划船', en: 'Barbell / Smith Row', targetSets: 3, restSec: 120, reps: 6, note: '30–35kg，复合大动作，护好腰' },
+      { name: '高位下拉', en: 'Lat Pulldown', targetSets: 3, restSec: 90, reps: 8, note: '重量待测试' },
+      { name: '坐姿划船', en: 'Seated Cable Row', targetSets: 2, restSec: 90, reps: 8, note: '30kg' },
+      { name: '短杠弯举', en: 'Barbell Biceps Curl', targetSets: 3, restSec: 75, reps: 8, note: '10kg 杠片 + 杠' },
+      { name: '哑铃锤式弯举', en: 'Dumbbell Hammer Curl', targetSets: 2, restSec: 60, reps: 10, note: '20lb/手，做完闪人' },
     ],
   },
   {
     id: 3,
     block: 3,
     place: 'gym',
-    name: '板块 3 · 护膝强腿',
-    focus: '特种兵护膝强腿',
-    durationEst: '45 分钟',
+    name: 'Day 3 · 腿',
+    focus: '腿部',
+    durationEst: '50–53 分钟',
     exercises: [
-      { name: '卧姿腿弯举', en: 'Lying Leg Curl', targetSets: 4, restSec: 60, reps: 12, note: '预热大腿后侧与膝关节' },
-      { name: '坐姿腿屈伸', en: 'Seated Leg Extension', targetSets: 4, restSec: 60, reps: 12, note: '顶峰停顿 1 秒，激活子弹肌' },
-      { name: '坐姿倒蹬机', en: 'Seated Leg Press', targetSets: 4, restSec: 90, reps: 12, note: '大重量复合，蹬完深呼吸' },
-      { name: '靠墙静蹲', en: 'Wall Sit', targetSets: 3, restSec: 45, mode: 'time', holdSec: 45, note: '固化稳定性收尾' },
+      { name: '坐姿腿推', en: 'Seated Leg Press', targetSets: 4, restSec: 120, reps: 8, note: '50kg' },
+      { name: '卧姿腿弯举', en: 'Lying Leg Curl', targetSets: 3, restSec: 90, reps: 8, note: '25kg' },
+      { name: '坐姿腿屈伸', en: 'Seated Leg Extension', targetSets: 3, restSec: 60, reps: 10, note: '机器坏了先用 Reverse Nordic 3×8–12 代替，修好换回来' },
+      { name: 'Smith 小腿提踵', en: 'Smith Machine Calf Raise', targetSets: 3, restSec: 60, reps: 10, note: '重量待测试' },
+      { name: '靠墙静蹲', en: 'Wall Sit', targetSets: 2, restSec: 45, mode: 'time', holdSec: 45, note: '自重，固化稳定性收尾' },
     ],
   },
   {
     id: 4,
     block: 4,
     place: 'gym',
-    name: '板块 4 · 肩 + 腹',
-    focus: '肩膀 + 腹肌雕刻',
-    durationEst: '47 分钟',
+    name: 'Day 4 · 肩 + 腹',
+    focus: '肩膀 + 腹肌',
+    durationEst: '45–50 分钟',
     exercises: [
-      { name: '哑铃坐姿推肩', en: 'Dumbbell Shoulder Press', targetSets: 4, restSec: 75, reps: 12 },
-      { name: '哑铃侧平举', en: 'Dumbbell Lateral Raise', targetSets: 4, restSec: 60, reps: 12, note: '打造倒三角宽肩' },
-      { name: '绳索面拉 / 后束飞鸟', en: 'Face Pull / Rear Delt Fly', targetSets: 4, restSec: 60, reps: 12 },
-      { name: '抬腿卷腹机', en: 'Ab Crunch / Leg Raise Machine', targetSets: 4, restSec: 45, reps: 12, note: '腹肌耐受力强，休息短效果好' },
-      { name: '山羊挺身 / 平板支撑', en: 'Hyperextension / Plank', targetSets: 3, restSec: 45, mode: 'time', holdSec: 45, note: '护腰收尾' },
+      { name: '坐姿哑铃推肩', en: 'Dumbbell Shoulder Press', targetSets: 3, restSec: 90, reps: 6, note: '30lb/手' },
+      { name: '哑铃侧平举', en: 'Dumbbell Lateral Raise', targetSets: 4, restSec: 60, reps: 12, note: '15lb/手，打造倒三角宽肩' },
+      { name: '绳索面拉', en: 'Face Pull', targetSets: 3, restSec: 60, reps: 12, note: '25kg' },
+      { name: '腹部卷腹机', en: 'Ab Crunch Machine', targetSets: 3, restSec: 60, reps: 8, note: '重量待测试' },
+      { name: '悬垂抬膝', en: 'Hanging Knee Raise', targetSets: 3, restSec: 60, reps: 8, note: '自重' },
     ],
   },
 ];
@@ -104,15 +107,16 @@ export const GYM_ROUTINES = [
 // The same four days with nothing but a floor, a wall and body weight.
 //
 // Matched exercise-for-exercise to the gym version rather than being a generic
-// "home workout": the point is that missing the gym doesn't break the rotation.
-// Set counts and rests stay the same, so the 45-50 minute shape of the session
-// survives too.
+// "home workout": the point is that missing the gym doesn't break the
+// rotation. Names now say "Day" to match the gym side after the September
+// rewrite — the muscle groups per day didn't change, so the exercises below
+// didn't need to.
 export const HOME_ROUTINES = [
   {
     id: 101,
     block: 1,
     place: 'home',
-    name: '板块 1 · 胸 + 三头（徒手）',
+    name: 'Day 1 · 胸 + 三头（徒手）',
     focus: '胸肌 + 三头肌',
     durationEst: '42 分钟',
     exercises: [
@@ -127,7 +131,7 @@ export const HOME_ROUTINES = [
     id: 102,
     block: 2,
     place: 'home',
-    name: '板块 2 · 背 + 二头（徒手）',
+    name: 'Day 2 · 背 + 二头（徒手）',
     focus: '背部 + 二头肌',
     durationEst: '43 分钟',
     exercises: [
@@ -142,8 +146,8 @@ export const HOME_ROUTINES = [
     id: 103,
     block: 3,
     place: 'home',
-    name: '板块 3 · 护膝强腿（徒手）',
-    focus: '特种兵护膝强腿',
+    name: 'Day 3 · 腿（徒手）',
+    focus: '腿部',
     durationEst: '42 分钟',
     exercises: [
       { name: '臀桥 / 单腿臀桥', en: 'Glute Bridge', targetSets: 4, restSec: 60, reps: 12, note: '预热后侧链与膝关节' },
@@ -156,8 +160,8 @@ export const HOME_ROUTINES = [
     id: 104,
     block: 4,
     place: 'home',
-    name: '板块 4 · 肩 + 腹（徒手）',
-    focus: '肩膀 + 腹肌雕刻',
+    name: 'Day 4 · 肩 + 腹（徒手）',
+    focus: '肩膀 + 腹肌',
     durationEst: '44 分钟',
     exercises: [
       { name: '派克俯卧撑', en: 'Pike Push-up', targetSets: 4, restSec: 75, reps: 12, note: '代替推肩' },

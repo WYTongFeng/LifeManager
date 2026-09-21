@@ -2,8 +2,8 @@ import React, { useState, useMemo, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import confetti from 'canvas-confetti';
 import {
-  Play, Pause, Dumbbell, Timer, Flame, CheckCircle, Clock, Trash2, Plus, X,
-  Repeat, HeartPulse, Scale, Trophy, ArrowRight, ChevronLeft, Check, Copy,
+  Play, Pause, Dumbbell, Flame, CheckCircle, Clock, Trash2, Plus, X,
+  Repeat, HeartPulse, Scale, Trophy, ArrowRight, ChevronLeft, Check, Copy, Pencil,
 } from '../utils/icons';
 import { usePersistentState, getTodayString, useToday, useNowMinute } from '../utils/storage';
 import { num, sumBy, newId } from '../utils/num';
@@ -18,7 +18,7 @@ import {
   routineTotalSets, estimateRoutineMinutes, countSets,
 } from '../utils/workoutPlan';
 import {
-  DEFAULT_ROUTINES, PLACES, WARMUP_MIN, SWITCH_LIMIT_SEC,
+  DEFAULT_ROUTINES, PLACES, WARMUP_MIN,
 } from '../utils/workoutRoutines';
 import {
   calcBMR, strengthSetCalories, sessionCalories, restingBurnSoFar,
@@ -165,8 +165,6 @@ const fieldStyle = {
  */
 export default function SportsModule({ workouts, setWorkouts, timer, history = [], allWorkouts = [] }) {
   const {
-    restSeconds, setRestSeconds, timerRunning, setTimerRunning,
-    stopwatchSeconds, sessionActive, startRestTimer, resetSession,
     cardioSeconds, cardioRunning, startCardioTimer, pauseCardioTimer, resetCardioTimer,
   } = timer;
 
@@ -411,6 +409,39 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
       : r)));
   };
 
+  // The deeper editor: name, rest time, reps and notes per exercise, plus
+  // renaming the routine itself. ▲▼ and ± (above) were the only edits
+  // possible before this — enough to nudge a routine the app invented, not
+  // enough to type in a real programme redesigned from scratch. This is what
+  // lets a menu change (like this one) happen in the app instead of in code.
+  const [editingPlan, setEditingPlan] = useState(false);
+
+  const renameRoutine = (name) => {
+    if (!activeRoutine) return;
+    setRoutines(routinesRaw.map(r => (r.id === activeRoutine.id ? { ...r, name } : r)));
+  };
+
+  const updateExercise = (idx, patch) => {
+    if (!activeRoutine) return;
+    setRoutines(routinesRaw.map(r => (r.id === activeRoutine.id
+      ? { ...r, exercises: r.exercises.map((ex, i) => (i === idx ? { ...ex, ...patch } : ex)) }
+      : r)));
+  };
+
+  const deleteExercise = (idx) => {
+    if (!activeRoutine) return;
+    const exercises = activeRoutine.exercises.filter((_, i) => i !== idx);
+    if (exercises.length === 0) return; // a routine always keeps at least one exercise
+    setRoutines(routinesRaw.map(r => (r.id === activeRoutine.id ? { ...r, exercises } : r)));
+    setPinnedIndex(null);
+  };
+
+  const addExercise = () => {
+    if (!activeRoutine) return;
+    const exercises = [...activeRoutine.exercises, { name: '新动作', targetSets: 3, restSec: 60, reps: 12 }];
+    setRoutines(routinesRaw.map(r => (r.id === activeRoutine.id ? { ...r, exercises } : r)));
+  };
+
   const handleLogSet = (e) => {
     e.preventDefault();
     if (!currentExercise) return;
@@ -459,10 +490,6 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
     if (currentExercise.doneSets + 1 >= currentExercise.targetSets) setPinnedIndex(null);
     // Fields fall back to this set's numbers via lastSetFor on the next render.
     setWeightKg(''); setReps('');
-    // The plan's rest, not a flat 60 — 75 after heavy incline press, 45 after a
-    // pushdown. This is the difference between the session fitting in 50
-    // minutes and not.
-    startRestTimer(currentExercise.restSec);
   };
 
   // --- "I already trained, just record it" ---------------------------------
@@ -1200,65 +1227,135 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
             }} />
           </div>
 
-          <button
-            onClick={() => { setPinnedIndex(null); navigate('/sports/strength/session'); }}
-            style={{
-              width: '100%', marginTop: '14px', padding: '0.85rem',
-              background: progress.isComplete ? 'var(--bg-card)' : 'var(--color-sports)',
-              color: progress.isComplete ? 'var(--color-sports)' : 'var(--color-sports-ink)',
-              border: progress.isComplete ? '1px solid var(--color-sports)' : 'none',
-              borderRadius: 'var(--radius-sm)', fontSize: '0.92rem', fontWeight: '800', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
-            }}
-          >
-            <Play size={16} />
-            {progress.viaSession ? '再练几组？逐组记录'
-              : progress.isComplete ? '今天练完了 · 再加几组'
-              : progress.doneSets > 0 ? `继续训练 · 下一个「${progress.current?.name}」`
-              : `开始训练 · 先做「${progress.current?.name}」`}
-          </button>
-
-          {/* The other way to log a day, and it is not a lesser one.
-              Set-by-set is better data; "I did 板块 1, 50 分钟" is what actually
-              gets recorded when the phone stayed in the locker and the timer
-              was the one on his wrist. An app that only supports the diligent
-              version of you collects a week of records and then nothing. */}
+          {/* Primary action is logging the whole thing, not stepping through
+              it — that is what actually happens most days: phone in the
+              locker, own timer, and one fact worth keeping at the end. The
+              set-by-set screen is still one tap away for the rare exercise
+              worth logging in detail (chasing a PR, say), just not the
+              button this card leads with. */}
           {progress.viaSession ? (
             <p style={{
-              marginTop: '10px', fontSize: '0.72rem', color: 'var(--color-money)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+              marginTop: '14px', fontSize: '0.78rem', color: 'var(--color-money)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontWeight: '700',
             }}>
-              <Check size={14} /> 这个板块今天已经整场记录了
+              <Check size={15} /> 这个板块今天已经整场记录了
             </p>
           ) : (
             <button
               onClick={openQuickLog}
               style={{
-                width: '100%', marginTop: '8px', padding: '0.7rem',
-                background: 'transparent', color: 'var(--text-secondary)',
-                border: '1px dashed var(--border-glass)',
-                borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700', cursor: 'pointer',
+                width: '100%', marginTop: '14px', padding: '0.85rem',
+                background: 'var(--color-sports)', color: 'var(--color-sports-ink)', border: 'none',
+                borderRadius: 'var(--radius-sm)', fontSize: '0.92rem', fontWeight: '800', cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
               }}
             >
-              <Check size={15} /> 已经练完了 · 直接记录一整场
+              <CheckCircle size={16} /> 练完了 · 记录这一场
             </button>
           )}
+
+          <button
+            onClick={() => { setPinnedIndex(null); navigate('/sports/strength/session'); }}
+            style={{
+              width: '100%', marginTop: '8px', padding: '0.7rem',
+              background: 'transparent', color: 'var(--text-secondary)',
+              border: '1px dashed var(--border-glass)',
+              borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
+            }}
+          >
+            <Dumbbell size={14} />
+            {progress.isComplete ? '今天练完了 · 再加几组'
+              : progress.doneSets > 0 ? `逐个动作记 · 继续「${progress.current?.name}」`
+              : `逐个动作记 · 从「${progress.current?.name}」开始`}
+          </button>
         </div>
 
         {/* The order, stated. Reorderable, but always saying what comes first. */}
         <div style={{ marginTop: '1.1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
             <h3 style={{ fontSize: '0.95rem', fontWeight: '700' }}>动作顺序</h3>
-            <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>▲▼ 换顺序 · ± 调组数</span>
+            <button onClick={() => setEditingPlan(v => !v)} className="btn-secondary" style={{ padding: '4px 9px', fontSize: '0.68rem' }}>
+              {editingPlan ? '完成编辑' : <><Pencil size={11} /> 编辑菜单</>}
+            </button>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
-            {plan.map(p => renderPlanRow(p, { editable: true, onPick: (i) => { setPinnedIndex(i); navigate('/sports/strength/session'); } }))}
-          </div>
-          <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '9px', lineHeight: 1.5 }}>
-            这个板块一共 {progress.targetSets} 组。± 只改这个动作，加一组就是这天多一组 —
-            你的计划说几组就几组，app 不会偷偷帮你搬。
-          </p>
+
+          {editingPlan ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div>
+                <label style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>菜单名称</label>
+                <input
+                  type="text"
+                  value={activeRoutine.name}
+                  onChange={(e) => renameRoutine(e.target.value)}
+                  style={{ ...fieldStyle, fontWeight: '700' }}
+                />
+              </div>
+              {activeRoutine.exercises.map((exo, idx) => (
+                <div key={idx} className="glass-card" style={{ padding: '0.7rem 0.8rem' }}>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      value={exo.name}
+                      onChange={(e) => updateExercise(idx, { name: e.target.value })}
+                      placeholder="动作名称"
+                      style={{ ...fieldStyle, flex: 1, marginTop: 0 }}
+                    />
+                    <button onClick={() => moveExercise(idx, -1)} disabled={idx === 0}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: idx === 0 ? 'default' : 'pointer', opacity: idx === 0 ? 0.35 : 1, fontSize: '0.9rem' }}>▲</button>
+                    <button onClick={() => moveExercise(idx, 1)} disabled={idx === activeRoutine.exercises.length - 1}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: idx === activeRoutine.exercises.length - 1 ? 'default' : 'pointer', opacity: idx === activeRoutine.exercises.length - 1 ? 0.35 : 1, fontSize: '0.9rem' }}>▼</button>
+                    <button onClick={() => deleteExercise(idx)} style={{ background: 'none', border: 'none', color: 'var(--color-accent-red)', cursor: 'pointer' }}>
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)' }}>组数</label>
+                      <input type="number" inputMode="numeric" value={exo.targetSets ?? ''}
+                        onChange={(e) => updateExercise(idx, { targetSets: parseInt(e.target.value, 10) || 1 })}
+                        style={{ ...fieldStyle, padding: '6px 8px' }} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)' }}>{exo.mode === 'time' ? '每组秒数' : '目标次数'}</label>
+                      <input type="number" inputMode="numeric"
+                        value={exo.mode === 'time' ? (exo.holdSec ?? '') : (exo.reps ?? '')}
+                        onChange={(e) => updateExercise(idx, exo.mode === 'time'
+                          ? { holdSec: parseInt(e.target.value, 10) || 1 }
+                          : { reps: parseInt(e.target.value, 10) || 1 })}
+                        style={{ ...fieldStyle, padding: '6px 8px' }} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)' }}>休息(秒)</label>
+                      <input type="number" inputMode="numeric" value={exo.restSec ?? ''}
+                        onChange={(e) => updateExercise(idx, { restSec: parseInt(e.target.value, 10) || 60 })}
+                        style={{ ...fieldStyle, padding: '6px 8px' }} />
+                    </div>
+                  </div>
+                  <input
+                    type="text"
+                    value={exo.note ?? ''}
+                    onChange={(e) => updateExercise(idx, { note: e.target.value })}
+                    placeholder="备注（选填，例：重量、次数范围、替代动作）"
+                    style={{ ...fieldStyle, padding: '6px 8px', marginTop: '6px', fontSize: '0.76rem' }}
+                  />
+                </div>
+              ))}
+              <button onClick={addExercise} className="btn-secondary" style={{ fontSize: '0.8rem' }}>
+                <Plus size={14} /> 添加动作
+              </button>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                {plan.map(p => renderPlanRow(p, { editable: true, onPick: (i) => { setPinnedIndex(i); navigate('/sports/strength/session'); } }))}
+              </div>
+              <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '9px', lineHeight: 1.5 }}>
+                这个板块一共 {progress.targetSets} 组。± 只改这个动作的组数，加一组就是这天多一组 —
+                你的计划说几组就几组，app 不会偷偷帮你搬。改名字/次数/休息/备注，按上面「编辑菜单」。
+              </p>
+            </>
+          )}
         </div>
 
         {/* Today's log lives on the plan screen, not the session, so you can
@@ -1272,7 +1369,7 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
           </div>
           {strengthLogsForView.length === 0 ? (
             <div className="glass-card" style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
-              {strengthViewDate === todayStr ? '今天还没开始 — 按上面的「开始训练」。' : '这天没有力量记录。'}
+              {strengthViewDate === todayStr ? '今天还没开始 — 练完按上面的「记录这一场」。' : '这天没有力量记录。'}
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1292,15 +1389,6 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
         <div className="glass-card" style={{ padding: '0.75rem 0.9rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.72rem' }}>
             <span style={{ color: 'var(--text-secondary)', fontWeight: '600' }}>{activeRoutine.name}</span>
-            <span style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '5px' }}>
-              <Clock size={12} /> {formatClock(stopwatchSeconds)}
-              {sessionActive && (
-                <button onClick={resetSession} title="重置本次计时"
-                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0, fontSize: '0.7rem' }}>
-                  ↺
-                </button>
-              )}
-            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', marginTop: '6px' }}>
             <span style={{ fontSize: '1.4rem', fontWeight: '800', color: progress.isComplete ? 'var(--color-money)' : 'white' }}>
@@ -1406,6 +1494,7 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
                 : isHold
                   ? <>计划是撑 <strong>{prescribed} 秒</strong> × {currentExercise.targetSets} 组，已经填好了。</>
                   : <>计划是每组 <strong>{prescribed} 下</strong>，填上这组用的重量。</>}
+              {' '}组间休息 {currentExercise.restSec} 秒。
               {hasWeight && strengthPreviewKcal > 0 && <> 这组约 ~{strengthPreviewKcal} kcal。</>}
             </p>
 
@@ -1415,7 +1504,7 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
               borderRadius: 'var(--radius-sm)', cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem'
             }}>
-              <CheckCircle size={16} /> 完成第 {currentExercise.doneSets + 1} 组 · 休息 {currentExercise.restSec} 秒
+              <CheckCircle size={16} /> 完成第 {currentExercise.doneSets + 1} 组
             </button>
           </form>
 
@@ -1426,63 +1515,10 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
           }}>
             <ArrowRight size={13} color="var(--color-sports)" />
             {progress.next
-              ? <>做完接着 <strong style={{ color: 'var(--color-sports)' }}>{progress.next.name}</strong> · {progress.next.targetSets} 组
-                  <span style={{ color: 'var(--text-muted)' }}> · 换动作控死 {SWITCH_LIMIT_SEC} 秒内</span></>
+              ? <>做完接着 <strong style={{ color: 'var(--color-sports)' }}>{progress.next.name}</strong> · {progress.next.targetSets} 组</>
               : currentExercise.isDone
                 ? <>全部动作都做完了 — 想加练就继续这个动作。</>
                 : <>这是最后一个动作，剩 {currentExercise.remaining} 组就收工。</>}
-          </div>
-        </div>
-
-        {/* Rest timer — HERE, and nowhere else. It's a between-sets countdown,
-            so it belongs to the only screen that has sets between. */}
-        <div className="glass-card" style={{ textAlign: 'center', padding: '1.1rem 1rem', marginTop: '1rem' }}>
-          <span style={{ fontSize: '0.74rem', color: 'var(--color-sports)', fontWeight: '600', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
-            <Timer size={14} /> 组间休息 · 计划 {currentExercise.restSec} 秒
-          </span>
-          <div style={{
-            fontSize: '2.6rem',
-            fontFamily: 'Outfit, sans-serif',
-            fontWeight: '800',
-            color: restSeconds === 0 ? 'var(--color-money)' : restSeconds <= 10 ? 'var(--color-accent-red)' : 'var(--color-sports)',
-            letterSpacing: '2px',
-            margin: '0.3rem 0',
-          }}>
-            {formatClock(restSeconds)}
-          </div>
-          <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '0.8rem' }}>
-            {restSeconds === 0 ? '休息完成！下一组' : timerRunning ? '休息中…' : '暂停中'}
-          </p>
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '7px', flexWrap: 'wrap' }}>
-            <button onClick={() => setTimerRunning(!timerRunning)} style={{
-              background: 'var(--color-sports)', color: 'var(--color-sports-ink)', border: 'none',
-              padding: '7px 15px', fontSize: '0.8rem', fontWeight: '700', borderRadius: 'var(--radius-sm)',
-              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px',
-            }}>
-              {timerRunning ? <Pause size={15} /> : <Play size={15} />}
-              {timerRunning ? '暂停' : '继续'}
-            </button>
-            {/* The plan's own rest for THIS exercise leads, then the generic
-                presets. It used to be a flat 45/60/75/90 with no indication of
-                which one the programme actually asks for — so the number you
-                were supposed to press was the one thing the screen didn't say. */}
-            {[...new Set([currentExercise.restSec, 45, 60, 75, 90])].map(secs => (
-              <button key={secs} onClick={() => startRestTimer(secs)} style={{
-                background: restSeconds === secs ? 'var(--color-sports-soft)' : 'var(--bg-card)',
-                border: `1px solid ${restSeconds === secs ? 'var(--color-sports)' : 'var(--border-glass)'}`,
-                color: 'white', padding: '7px 13px', borderRadius: 'var(--radius-sm)',
-                fontSize: '0.76rem', cursor: 'pointer',
-              }}>
-                {secs}秒{secs === currentExercise.restSec ? ' ·计划' : ''}
-              </button>
-            ))}
-            <button onClick={() => setRestSeconds(prev => prev + 30)} style={{
-              background: 'var(--bg-card)', border: '1px solid var(--border-glass)',
-              color: 'var(--text-secondary)', padding: '7px 11px', borderRadius: 'var(--radius-sm)',
-              fontSize: '0.74rem', cursor: 'pointer',
-            }}>
-              +30秒
-            </button>
           </div>
         </div>
 

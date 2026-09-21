@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import confetti from 'canvas-confetti';
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
 import Dashboard from './components/Dashboard';
@@ -50,24 +49,6 @@ const HUD = {
   special: ['⭐ SPECIAL // 特别的日子', '生日 · 纪念日 · 倒数'],
   alerts: ['🔔 ALERTS // 通知中心', '要知道的 · 要做的'],
 };
-
-// Rest-timer completion beep (A5 sine tone)
-function playBeep() {
-  try {
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.start();
-    osc.stop(audioCtx.currentTime + 0.4);
-  } catch (e) {
-    console.log('Audio error:', e);
-  }
-}
 
 // Signatures of the demo history that used to ship with the app. It inflated
 // the Level/XP badge with days the user never actually logged, so it's gone —
@@ -149,8 +130,44 @@ function localizeDefaultRoutines() {
   }
 }
 
+// The stock routines were rewritten in September (a real programme redesign,
+// not a translation) — see workoutRoutines.js. Matched per routine by id AND
+// by its old name being exactly what shipped, so a routine already renamed,
+// edited or added by the user is left alone; only an untouched stock routine
+// gets swapped for its replacement.
+const OLD_STOCK_ROUTINE_NAMES = {
+  1: '板块 1 · 胸 + 三头', 2: '板块 2 · 背 + 二头', 3: '板块 3 · 护膝强腿', 4: '板块 4 · 肩 + 腹',
+  101: '板块 1 · 胸 + 三头（徒手）', 102: '板块 2 · 背 + 二头（徒手）',
+  103: '板块 3 · 护膝强腿（徒手）', 104: '板块 4 · 肩 + 腹（徒手）',
+};
+
+function updateStockRoutines() {
+  try {
+    if (localStorage.getItem('lifemanager:stockRoutinesSep2026') === 'true') return;
+
+    const raw = localStorage.getItem('lifemanager:routines');
+    if (raw) {
+      const stored = JSON.parse(raw);
+      if (Array.isArray(stored)) {
+        const next = stored.map(r => {
+          const oldName = OLD_STOCK_ROUTINE_NAMES[r?.id];
+          if (oldName && r?.name === oldName) {
+            return DEFAULT_ROUTINES.find(d => d.id === r.id) ?? r;
+          }
+          return r;
+        });
+        localStorage.setItem('lifemanager:routines', JSON.stringify(next));
+      }
+    }
+    localStorage.setItem('lifemanager:stockRoutinesSep2026', 'true');
+  } catch (e) {
+    console.warn('Stock routine update failed', e);
+  }
+}
+
 purgeDemoHistory();
 localizeDefaultRoutines();
+updateStockRoutines();
 // Stamps pre-schema-v2 records with the day they were logged. Must run before
 // any component reads storage, for the same reason as the purge above.
 runMigrations();
@@ -334,45 +351,17 @@ export default function App() {
     setAllExpenses(prev => prev.filter(e => !doomed.has(e.id)));
   }, [setAllExpenses]);
 
-  // Notification capture — here for the same reason the rest timer is: the
-  // Money screen unmounts the moment you navigate away, and this has to keep
-  // working while you're anywhere else in the app, or off it entirely. It used
-  // to be wired up inside the Money screen's auto-capture card, so a payment
-  // made while you were on any other tab was captured by the phone and then
-  // thrown away before it ever reached an expense.
+  // Notification capture — the Money screen unmounts the moment you navigate
+  // away, and this has to keep working while you're anywhere else in the app,
+  // or off it entirely. It used to be wired up inside the Money screen's
+  // auto-capture card, so a payment made while you were on any other tab was
+  // captured by the phone and then thrown away before it ever reached an
+  // expense.
   useTngCapture({ setExpenses });
 
-  // Gym rest timer — lives here, not in SportsModule, so it keeps counting
-  // while you're on another tab (SportsModule unmounts when you navigate away)
-  const [restSeconds, setRestSeconds] = useState(60);
-  const [timerRunning, setTimerRunning] = useState(false);
-
-  // Session stopwatch. It used to be incremented inside the rest-timer
-  // interval, so "Total Session" actually measured time spent *resting* — it
-  // froze the moment a rest ended. It now runs from the wall clock, from the
-  // start of the session until it's reset.
-  const [sessionStartedAt, setSessionStartedAt] = useState(null);
-  const [stopwatchSeconds, setStopwatchSeconds] = useState(0);
-
-  useEffect(() => {
-    if (sessionStartedAt === null) { setStopwatchSeconds(0); return; }
-    const tick = () => setStopwatchSeconds(Math.floor((Date.now() - sessionStartedAt) / 1000));
-    tick();
-    const interval = setInterval(tick, 1000);
-    return () => clearInterval(interval);
-  }, [sessionStartedAt]);
-
-  // Cardio stopwatch — a count-UP clock, and deliberately not the same thing as
-  // the rest countdown above.
-  //
-  // The cardio screen used to show the between-sets rest timer, which is
-  // meaningless there: a run has no sets to rest between. What it actually
-  // needs is "how long have I been going", which then fills the duration field
-  // so the minutes aren't guessed after the fact.
-  //
-  // Lives up here with the rest timer for the same reason: SportsModule
-  // unmounts when you switch tabs, and a stopwatch that resets because you
-  // checked a message is worse than no stopwatch.
+  // Cardio stopwatch — a count-UP clock. Lives here, not in SportsModule, so
+  // it keeps counting while you're on another tab (SportsModule unmounts when
+  // you navigate away).
   //
   // Split into a paused accumulator plus a running-since stamp so pausing at a
   // traffic light doesn't lose the elapsed time, and so the clock is read from
@@ -390,41 +379,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, [cardioStartedAt, cardioBaseSeconds]);
 
-  // When the rest countdown last hit zero, so the "rest complete" notification
-  // can expire instead of sitting in the bell forever.
-  const [restCompletedAt, setRestCompletedAt] = useState(null);
-
-  useEffect(() => {
-    if (!timerRunning) return;
-
-    const interval = setInterval(() => {
-      setRestSeconds(prev => {
-        if (prev <= 1) {
-          setTimerRunning(false);
-          setRestCompletedAt(Date.now());
-          playBeep();
-          confetti({ particleCount: 30, spread: 50 });
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [timerRunning]);
-
-  const startRestTimer = (seconds = 60) => {
-    setRestSeconds(seconds);
-    setTimerRunning(true);
-    setRestCompletedAt(null);
-    setSessionStartedAt(prev => prev ?? Date.now());
-  };
-
-  const resetSession = () => {
-    setSessionStartedAt(null);
-    setRestCompletedAt(null);
-  };
-
   const startCardioTimer = () => setCardioStartedAt(prev => prev ?? Date.now());
 
   const pauseCardioTimer = () => {
@@ -437,14 +391,11 @@ export default function App() {
 
   const resetCardioTimer = () => { setCardioStartedAt(null); setCardioBaseSeconds(0); };
 
+  // The between-sets rest timer that used to live here (plus a "Total
+  // Session" stopwatch it drove) was removed 2026-09: he never brings the
+  // phone into the gym, so nothing on his phone ever started it. Only
+  // cardio's own clock survives — a run really does get tracked live.
   const timer = {
-    restSeconds, setRestSeconds,
-    timerRunning, setTimerRunning,
-    stopwatchSeconds,
-    sessionActive: sessionStartedAt !== null,
-    startRestTimer,
-    resetSession,
-    // Cardio's own clock — see above for why it isn't the rest timer.
     cardioSeconds,
     cardioRunning: cardioStartedAt !== null,
     startCardioTimer,
@@ -489,12 +440,6 @@ export default function App() {
       text: `今天超预算 RM ${(totalSpendToday - num(dailyBudget)).toFixed(2)}`,
     });
   }
-  // Expires after two minutes. This used to have no time component, so once a
-  // rest finished the notification stayed in the bell indefinitely.
-  if (restCompletedAt !== null && Date.now() - restCompletedAt < 120_000) {
-    alerts.push({ id: 'rest', tone: 'good', route: '/sports', text: '休息完了 —— 可以下一组了' });
-  }
-
   // What the logging nudges need in order to know whether they have anything to
   // say. Passed rather than read inside the nudge code on purpose: a nudge
   // asserts that something is NOT logged, and the module that owns the records
@@ -750,7 +695,6 @@ export default function App() {
                 history={history}
                 archivedXp={archivedXp}
                 onOpenExport={() => setShowExportModal(true)}
-                onStartRestTimer={startRestTimer}
               />
             } />
 

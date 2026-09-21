@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Flame, Dumbbell, Wallet, Sparkles, ArrowRight, Camera, Timer, BellRing, History as HistoryIcon,
+  Flame, Dumbbell, Wallet, Sparkles, ArrowRight, Camera, BellRing, History as HistoryIcon,
   CalendarDays,
 } from '../utils/icons';
 import confetti from 'canvas-confetti';
@@ -30,7 +30,7 @@ export default function Dashboard({
   expenses, dailyBudget,
   allMeals = [], allWorkouts = [], allExpenses = [],
   history, archivedXp = 0,
-  onOpenExport, onStartRestTimer
+  onOpenExport,
 }) {
   const navigate = useNavigate();
   const [showHistory, setShowHistory] = useState(false);
@@ -776,7 +776,7 @@ export default function Dashboard({
       {/* Quick Action Shortcuts */}
       <div>
         <h3 style={{ fontSize: '0.88rem', fontWeight: '700', marginBottom: '0.6rem' }}>Quick Actions</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
 
           <button
             onClick={() => navigate('/diet')}
@@ -794,24 +794,6 @@ export default function Dashboard({
           >
             <Camera size={18} color="var(--color-diet)" />
             <span>Scan Meal</span>
-          </button>
-
-          <button
-            onClick={() => { onStartRestTimer(60); navigate('/sports'); }}
-            className="glass-card"
-            style={{
-              padding: '10px 6px',
-              color: 'white',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '4px',
-              cursor: 'pointer',
-              fontSize: '0.72rem'
-            }}
-          >
-            <Timer size={18} color="var(--color-sports)" />
-            <span>Gym Timer</span>
           </button>
 
           <button

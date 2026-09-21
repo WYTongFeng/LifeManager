@@ -64,27 +64,31 @@ check('a blank target is filled without touching the stated ones',
 //
 // The whole point of the change: these are the user's own numbers, and
 // normalizing must return them unchanged.
-check('gym block set totals', GYM_ROUTINES.map(routineTotalSets), [20, 18, 15, 19]);
+check('gym block set totals', GYM_ROUTINES.map(routineTotalSets), [14, 16, 15, 16]);
 check('home block set totals', HOME_ROUTINES.map(routineTotalSets), [20, 18, 15, 19]);
 check('normalizing the real routines changes nothing',
-  GYM_ROUTINES.map(r => routineTotalSets(normalizeRoutineSets(r))), [20, 18, 15, 19]);
+  GYM_ROUTINES.map(r => routineTotalSets(normalizeRoutineSets(r))), [14, 16, 15, 16]);
 check('every gym block pairs with a home block of the same number',
   HOME_ROUTINES.map(r => r.block), GYM_ROUTINES.map(r => r.block));
 
-// Rest times are the plan's, not a flat 60 — this is what makes it fit in 50
-// minutes, and what the timer reads.
-check('incline press rests 75s', restSecFor(GYM_ROUTINES[0].exercises[0]), 75);
-check('the finisher rests 45s', restSecFor(GYM_ROUTINES[0].exercises[4]), 45);
-check('barbell row rests 90s', restSecFor(GYM_ROUTINES[1].exercises[1]), 90);
+// Rest times are the plan's, not a flat 60 — this is what the timer reads.
+check('incline press rests 120s', restSecFor(GYM_ROUTINES[0].exercises[0]), 120);
+check('the finisher rests 60s', restSecFor(GYM_ROUTINES[0].exercises[4]), 60);
+check('barbell row rests 120s', restSecFor(GYM_ROUTINES[1].exercises[1]), 120);
 check('an exercise with no rest set falls back to 60',
   restSecFor({ name: '随便' }), 60);
 
-// Every block lands in the 30-50 minute window it was designed around.
+// This is a sanity bound on the auto-ESTIMATE (reps x 4s + rest + warm-up),
+// not his real wall-clock target — he reports 50-53 minutes per day in the
+// gym, which includes waiting for equipment and walking between machines that
+// the formula doesn't model. The estimate only has to stay in the right
+// neighbourhood; the quick-log screen lets him overwrite it with what
+// actually happened.
 const inRange = GYM_ROUTINES.every(r => {
   const m = estimateRoutineMinutes(r);
-  return m >= 30 && m <= 50;
+  return m >= 25 && m <= 45;
 });
-check('every block estimates to a 30-50 minute session', inRange, true);
+check('every block estimates to a reasonable session length', inRange, true);
 
 // --- counting sets across three record shapes ------------------------------
 check('a plain set counts as one', countSets([{ type: 'strength' }]), 1);
