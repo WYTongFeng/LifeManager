@@ -2,7 +2,7 @@
 
 Tracks progress toward turning the LifeManager mockup into a complete personal app. Updated as we go.
 
-## M58 — 归类中心, and a share tab that doesn't jump the gun 🚧 phase 1/2 of 5 — v1.12.0
+## M58 — 归类中心, a share tab that doesn't jump the gun, and its own bills ✅ done — v1.13.0
 
 A 2026-09-20 check-in surfaced two things at once: some of this cycle's rent/Time/Spotify had been
 logged as plain expenses before 共摊本 existed to catch them, with no way back short of deleting and
@@ -10,7 +10,7 @@ re-entering each one — and once the real cash flow got worked out (his dad's R
 whole RM2,000 rent, five housemates separately refund their share of it, so his own share is really
 ~RM302, not RM2,000), the household bills were headed INTO the share tab, which would have pressed
 his daily allowance downward every time a bill left before housemates had paid back their part. Five
-steps were scoped (see the plan doc sent that session); this ships the first two.
+steps were scoped (see the plan doc sent that session); all five are done.
 
 **归类中心.** A new full-screen search over every expense ever logged — by cycle/prior
 cycle/all-time/custom range, direction, category, merchant text, and a new 归属 filter
@@ -32,10 +32,37 @@ slice straight from the tab's raw records, independent of this new rule — it a
 numbers before this change (both always included the net) and would have silently stopped agreeing
 without the same gate. Fixed the same way, off the same exported `hasCycleEnded`.
 
-**Still to come:** whether PBE stays 代管 (his call, no code needed — the "只记录，不算进储蓄"
-checkbox that does what he wants already exists on AccountsView); a bills list living on the share
-tab itself, replacing the 固定月费 entries that used to represent rent/Time/Spotify; and a manual,
-reversible "结算" acknowledgment banner for a cycle that's ended but hasn't been looked at yet.
+**结算, and why the banner decides nothing.** `hasCycleEnded` already settles a cycle's net into the
+budget automatically — the open question was never arithmetic, it was "have I actually looked at
+what last month's tab came to" (his ask: "可以有一些手动确认的吗，我比较安心一点"). The stamp lives ON
+the tab itself (`tab.settled[cycleStart]`, same shape recurring.js already uses for
+`actuals`/`skipped`) so it needed no new persisted key. `ShareTabSettle.jsx` nags once per ended
+cycle with real, unacknowledged activity — however many cycles back that turns out to be — and after
+就这样结, replaces itself with one quiet "已结 · 取消结算" line for the most recent one, so settling
+stays a real decision and not a one-way door. An OS notification for this was scoped and deliberately
+deferred: the in-app banner already delivers the ask in full, a sixth source in notifications.js'
+registry is a separable follow-up.
+
+**A tab's own bills.** Rent/Time/Spotify needed somewhere to keep living once their payments moved
+into a 共摊本 — the "几号交" reminder had nowhere else to be. `shareTab.bills` is `{id, label, amount,
+dueDay}`, stripped of everything an allocation carries that doesn't apply here (frequency, variable,
+custodial) since a tab bill is always monthly and its whole cost nets against housemates anyway;
+`computeCycleBudget` never reads it. "已付" is asked, not stored — a tabbed expense this cycle
+carrying the bill's new `shareTabBillId` field is what answers it, the same shape `allocationId`
+already used. `ShareTabBills.jsx` lists each bill with due day and status, inline add/edit/delete, and
+记这笔 on an unpaid one — which hands off to MoneyModule's own entry form, pre-filled and pre-linked,
+rather than writing an expense from a second place. Migrating the OLD 固定月费 entries for these three
+into a tab's bills (and deleting the allocations) is left as a manual step — that's account-specific
+data, not something generic code should rewrite on its own.
+
+**表单瘦身, the last piece.** 算进共摊本吗 used to ask on every single record. It now collapses to a
+small "算进共摊本?" link by default, and a NEW merchant → 共摊本 memory (`merchantShareTabs`, learned
+the same way `merchantCategories` already is) expands it automatically — tab pre-selected, never
+silently decided — the moment a merchant matches one filed this way before. A manual pick marks the
+field "touched" for the rest of that form session, so a match can never fight a deliberate choice
+typed afterward; editing an existing record expands only when that record already carries a tab, and
+counts as touched regardless, so correcting a typo in the merchant can't retroactively apply a guess
+nobody asked for.
 
 ## M57 — A month that isn't like the others ✅ done — v1.11.0
 
