@@ -34,6 +34,7 @@ import {
 import { isNativeAvailable } from '../utils/tngNative';
 import { getCycle } from '../utils/cycle';
 import { setCycleActual } from '../utils/recurring';
+import { debtOutstanding } from '../utils/networth';
 import { tabsForCycle, contributors, outgoings } from '../utils/shareTabs';
 import ReclassifyCenter from './ReclassifyCenter';
 import ShareTabSettle from './ShareTabSettle';
@@ -131,6 +132,10 @@ export default function MoneyModule({
   // 共摊本 — the names only; the records are ordinary expenses carrying
   // `shareTabId`. See shareTabs.js.
   const shareTabs = useLiveJSON('shareTabs', []);
+  // Owned by CycleView, read here so a repayment can be tagged onto the SAME
+  // record being logged — same reasoning as allocations above. See the
+  // 「这笔是还哪个欠款吗」 field.
+  const debts = useLiveJSON('debts', []);
   // No screen-wide `cycle` here on purpose. The one thing this file does with
   // cycles — stamping a bill payment onto the right month — has to use the
   // cycle the PAYMENT falls in, not today's, or a payment filed late at the
@@ -220,6 +225,14 @@ export default function MoneyModule({
   // WHICH FIXED BILL this payment is. Without it a logged rent payment was
   // charged twice: once as the allocation's reservation, once as spending.
   const [formAllocationId, setFormAllocationId] = useState('');
+  // WHICH DEBT this payment settles, if any. Mirrors formAllocationId's
+  // pattern exactly: 「这笔是还哪个欠款吗」 tags the SAME record being saved,
+  // no separate makeRepayment() call, no second record. Before this, the
+  // only way to link a repayment was CycleView's own 记一笔还款 form — so a
+  // SPayLater auto-debit captured from TNG had nowhere to say "this IS a
+  // repayment" without logging it twice. His own ask, 2026-09-20: "我不如就
+  // 是侦测到我出钱...我可以选这是欠款，就自动扣掉".
+  const [formRepaysDebtId, setFormRepaysDebtId] = useState('');
   // Which 共摊本 this record belongs to, if any. Available on ALL three
   // directions on purpose: the bills go out of the tab and the housemates'
   // money comes into it, and both have to be able to say so.
@@ -564,6 +577,7 @@ export default function MoneyModule({
     setFormNewSource('');
     setFormInKind('mine');
     setFormAllocationId('');
+    setFormRepaysDebtId('');
     setFormShareTabId('');
     setFormNewShareTab('');
     setFormShareTabBillId('');
@@ -624,6 +638,7 @@ export default function MoneyModule({
       incomeSources.find(s => String(s.id) === String(expense.incomeSourceId))?.kind === 'passthrough'
         ? 'passthrough' : 'mine');
     setFormAllocationId(expense.allocationId != null ? String(expense.allocationId) : '');
+    setFormRepaysDebtId(expense.repaysDebtId != null ? String(expense.repaysDebtId) : '');
     setFormShareTabId(expense.shareTabId != null ? String(expense.shareTabId) : '');
     setFormNewShareTab('');
     setFormShareTabBillId(expense.shareTabBillId != null ? String(expense.shareTabBillId) : '');
@@ -766,7 +781,7 @@ export default function MoneyModule({
     // dropdown. Everything it needs is already on the form: the shop is the
     // label, the amount is the amount, the account is the account.
     let allocationId = !formRefund && formAllocationId ? formAllocationId : null;
-    if (!formRefund && !formShareTabId && formNewBill && formMerchant.trim() && magnitude > 0) {
+    if (!formRefund && !formShareTabId && !formRepaysDebtId && formNewBill && formMerchant.trim() && magnitude > 0) {
       const created = {
         id: newId(),
         label: formMerchant.trim(),
@@ -811,6 +826,13 @@ export default function MoneyModule({
       saveJSON('allocations', nextAllocations);
     }
 
+    // WHICH DEBT this repays, if any. Unlike allocationId there is nothing
+    // to write back here — debts.js derives 还了多少 by summing every
+    // expense carrying this id (`repaymentsFor`), so tagging the record IS
+    // the whole write. No parallel `paidFor`/`actuals` stamp to keep in
+    // step, because none exists.
+    const repaysDebtId = !formRefund && formRepaysDebtId ? formRepaysDebtId : null;
+
     // 共摊本. A brand-new one is created inline rather than sending him to
     // another screen and back — the moment you notice you need a tab is the
     // moment you are logging the first thing that belongs in it.
@@ -845,13 +867,17 @@ export default function MoneyModule({
       isMoneyIn: formMoneyIn,
       incomeSourceId,
       allocationId,
+      repaysDebtId,
       shareTabId,
       shareTabBillId,
       // Stamped at birth, same as makeTransfer and makeRepayment do. `txType`
       // would derive the same answer from the flags either way — that fallback
       // is permanent — but a record that says what it is beats one that has to
-      // be worked out, and it is what the user asked for by name.
+      // be worked out, and it is what the user asked for by name. Order
+      // matches txType()'s own priority exactly (accounts.js), so a stored
+      // `type` never contradicts what deriving it from the flags would say.
       type: formMoneyIn ? 'income'
+        : repaysDebtId ? 'repayment'
         : allocationId ? 'bill'
         : formRefund ? 'refund'
         : 'expense',
@@ -2322,13 +2348,13 @@ export default function MoneyModule({
                   cycle, once as spending on the day it left. Saying so here also
                   ticks that bill off for this cycle, because it is the same
                   statement. */}
-              {/* Hidden while a 共摊本 is chosen: a record counted by both
-                  machineries would reserve the same ringgit twice (the tab's
-                  net AND the allocation's), so the two are mutually exclusive.
-                  The arithmetic guards against it too — see computeCycleBudget
+              {/* Hidden while a 共摊本 or a debt repayment is chosen: a record
+                  counted by more than one machinery would reserve the same
+                  ringgit twice, so all three are mutually exclusive. The
+                  arithmetic guards against it too — see computeCycleBudget
                   — but the form should not offer a state that has to be
                   defended against. */}
-              {!formRefund && !formShareTabId && allocations.length > 0 && (
+              {!formRefund && !formShareTabId && !formRepaysDebtId && allocations.length > 0 && (
                 <div>
                   <label style={labelStyle}>这笔是固定月费吗?</label>
                   <select
@@ -2352,13 +2378,59 @@ export default function MoneyModule({
                 </div>
               )}
 
+              {/* WHICH DEBT, if any. Before this the only way to link a
+                  repayment was CycleView's own 记一笔还款 form — a separate
+                  record, a second entry. A SPayLater auto-debit captured off
+                  a TNG notification landed as a plain expense with no link
+                  at all, so it never actually reduced the tracked debt
+                  unless he ALSO opened 记一笔还款 and logged it a second
+                  time. This tags the SAME record instead — see debts.js:
+                  repaymentsFor sums by this id alone, so tagging IS the
+                  whole write, no parallel record, no parallel stamp.
+
+                  Hidden with the same reasoning as 固定月费 above: a debt
+                  repayment, a bill payment and a 共摊本 record all answer
+                  "this money was not plain spending", and only one of them
+                  can be true for a given record. */}
+              {!formRefund && !formShareTabId && !formAllocationId && debts.length > 0 && (
+                <div>
+                  <label style={labelStyle}>这笔是还哪个欠款吗?</label>
+                  <select
+                    value={formRepaysDebtId}
+                    onChange={(e) => {
+                      setFormRepaysDebtId(e.target.value);
+                      // 「这笔每个月都有」 stays visible alongside this select
+                      // (only formAllocationId hides it, not formNewBill) —
+                      // so picking a debt has to drop that intent itself, or
+                      // a record checked earlier and then tagged as a
+                      // repayment here would try to be both at once.
+                      if (e.target.value) setFormNewBill(false);
+                    }}
+                    style={inputStyle}
+                  >
+                    <option value="">不是，普通开销</option>
+                    {debts.map(d => (
+                      <option key={d.id} value={String(d.id)}>
+                        {d.creditor ?? '欠款'} · 还剩 RM {debtOutstanding(d, allExpenses ?? expenses).toFixed(2)}
+                      </option>
+                    ))}
+                  </select>
+                  {formRepaysDebtId && (
+                    <p style={{ fontSize: '0.68rem', color: 'var(--color-money)', marginTop: '5px', lineHeight: 1.5 }}>
+                      会算成还债，不会再当成一般消费扣一次 —— 这个月的预留已经算过这笔钱了，
+                      在这里扣第二次会变成罚你两次。
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* 「这笔每个月都有」 — build the bill from the record.
                   Creating a 固定月费 used to mean a trip to 本月 and back, and
                   the moment you know you have one is the moment you are paying
-                  it. Only offered when this isn't already linked to an existing
-                  bill or filed in a 共摊本 — all three answer the same question
-                  and only one of them can be true. */}
-              {!formRefund && !formShareTabId && !formAllocationId && (
+                  it. Only offered when this isn't already linked to an
+                  existing bill, a debt, or filed in a 共摊本 — all four
+                  answer the same question and only one of them can be true. */}
+              {!formRefund && !formShareTabId && !formAllocationId && !formRepaysDebtId && (
                 <div>
                   <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '7px', cursor: 'pointer' }}>
                     <input
@@ -2425,10 +2497,14 @@ export default function MoneyModule({
                       onChange={(e) => {
                         setFormShareTabId(e.target.value);
                         setFormShareTabTouched(true);
-                        // Picking a tab clears the two things it is mutually
+                        // Picking a tab clears the things it is mutually
                         // exclusive with, so a state that was legal a moment
                         // ago cannot survive into the saved record.
-                        if (e.target.value) { setFormAllocationId(''); setFormIsProject(false); }
+                        if (e.target.value) {
+                          setFormAllocationId('');
+                          setFormIsProject(false);
+                          setFormRepaysDebtId('');
+                        }
                         // A bill link only ever means anything for the exact
                         // tab it came from (see openLogBillModal) — changing
                         // the tab here, including switching to a different

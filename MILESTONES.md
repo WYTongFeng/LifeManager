@@ -2,6 +2,32 @@
 
 Tracks progress toward turning the LifeManager mockup into a complete personal app. Updated as we go.
 
+## M59 — 欠款打勾: a repayment tags the record instead of writing a second one ✅ done — v1.14.0
+
+The gap named in the 2026-09-20 check-in: 「这笔是固定月费吗」 already let a logged payment BECOME its
+bill, no second record — debt repayment had no equivalent. `repaysDebtId` was set in exactly one
+place, `makeRepayment()`, called only from CycleView's own 记一笔还款 form. A SPayLater auto-debit
+captured off a TNG notification landed as a plain expense with no link at all; making it actually
+reduce the tracked debt meant ALSO opening 记一笔还款 and logging it a second time — genuine double
+entry, and in practice probably just never happened, so the debt balance quietly drifted from what he
+actually paid.
+
+**这笔是还哪个欠款吗** — same slot and shape as 固定月费, mutually exclusive with it and with 共摊本
+(and clears 「这笔每个月都有」 too, so a record checked earlier can't try to be both a new bill and a
+repayment at once). Selecting a debt tags the SAME record being saved — `repaysDebtId`, plus `type:
+'repayment'` in the priority order `txType()` already checks it in, so a stored type can never
+contradict what deriving it from the flags would say. No `makeRepayment()` call: `debtOutstanding`/
+`repaymentsFor` (networth.js/debts.js) already derive everything by summing whatever carries a debt's
+id, so tagging IS the whole write — nothing else to keep in step. Works from `openEditModal` too,
+which is the actual point: a captured auto-debit gets tagged AFTER the fact, on the same record.
+
+Verified end to end: picking a debt shows its outstanding balance in the dropdown, saving reduces 户口
+欠款's total correctly, 本月's own 这个月还债 card picks up 「本月已还」 from this record exactly as if
+it had come from 记一笔还款, the amount is excluded from 花掉的 and folds into 固定开销 instead
+(`Math.max(planned, paid)`, same anti-double-count rule 固定月费 already used — required no new code,
+debts.js's existing `reservedForCycle` already worked this way), and re-opening the record to edit
+shows the debt correctly pre-selected. No console errors, full suite green.
+
 ## M58 — 归类中心, a share tab that doesn't jump the gun, and its own bills ✅ done — v1.13.0
 
 A 2026-09-20 check-in surfaced two things at once: some of this cycle's rent/Time/Spotify had been
