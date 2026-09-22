@@ -711,6 +711,10 @@ export default function App() {
                 macroTargets={macroTargets}
                 setMacroTargets={setMacroTargets}
                 workouts={workouts}
+                // The full histories, for the adaptive TDEE engine — it
+                // calibrates over weeks, and today's slice can't calibrate.
+                allMeals={allMeals}
+                allWorkouts={allWorkouts}
                 // Logging a protein shake as food goes through the SAME setter
                 // the diet screen uses, so it lands in one list with one owner
                 // rather than in a second nutrition store. See asMealRecord().

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { ClipboardPaste, Copy, Plus, AlertTriangle, Sparkles, Flame, Trash2, Utensils } from '../utils/icons';
+import React, { useState, useEffect, useMemo } from 'react';
+import { ClipboardPaste, Copy, Plus, AlertTriangle, Sparkles, Flame, Trash2, Utensils, Scale } from '../utils/icons';
 import confetti from 'canvas-confetti';
 import { usePersistentState, useLiveJSON } from '../utils/storage';
 import { num, sumBy, newId } from '../utils/num';
@@ -10,6 +10,7 @@ import {
 import { lookupFood, searchFoods } from '../utils/foodDb';
 import { estimateFoodFromText, sumItems, scaleItem } from '../utils/foodEstimate';
 import { AI_FOOD_PROMPT, parsePastedFood } from '../utils/foodPaste';
+import { computeTdee } from '../utils/tdee';
 import { nowTimeStr } from '../utils/datetime';
 
 /** Guess the meal slot from the clock, so the user rarely has to change it. */
@@ -21,7 +22,13 @@ function currentMealCategory(now = new Date()) {
   return 'Snacks';
 }
 
-export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLimit, macroTargets, setMacroTargets, workouts = [] }) {
+export default function DietModule({
+  meals, setMeals, calorieLimit, setCalorieLimit, macroTargets, setMacroTargets,
+  workouts = [],
+  // The whole history, not today's slice: the TDEE engine calibrates against
+  // weeks of intake and weigh-ins, and today alone can't calibrate anything.
+  allMeals = [], allWorkouts = [],
+}) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [editingMealId, setEditingMealId] = useState(null);
@@ -69,6 +76,12 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
   const heightCm = useLiveJSON('heightCm', null);
   const ageYears = useLiveJSON('ageYears', null);
   const sex = useLiveJSON('sex', null);
+  // The weigh-in history, owned by SportsModule's body-profile modal — read
+  // the same way as the four values above, for the same reason.
+  const weightLog = useLiveJSON('weightLog', []);
+  // The one number the engine cannot derive: where he actually wants to end up.
+  const [targetWeightKg, setTargetWeightKg] = usePersistentState('targetWeightKg', null);
+  const [weightGoalDraft, setWeightGoalDraft] = useState('');
 
   // Calculate stats
   const totalCalories = sumBy(meals, m => m.calories);
@@ -83,12 +96,40 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
   const bmr = calcBMR({ weightKg: bodyWeightKg, heightCm, age: ageYears, sex });
   const hasBodyProfile = bmr != null;
 
-  const suggestedTarget = calcCalorieTarget({ bmr, activityLevel, goal: dietGoal, workoutCalories });
+  const formulaTarget = calcCalorieTarget({ bmr, activityLevel, goal: dietGoal, workoutCalories });
   const balance = calcEnergyBalance({ bmr, activityLevel, intake: totalCalories, workoutCalories });
+
+  // The adaptive engine: same formula as a starting point, then pulled toward
+  // what the scale and the food log actually did. See tdee.js.
+  const tdee = useMemo(
+    () => computeTdee({
+      weightLog,
+      meals: allMeals,
+      workouts: allWorkouts,
+      bmr,
+      activityLevel,
+      goal: dietGoal,
+      currentWeightKg: bodyWeightKg,
+      targetWeightKg,
+    }),
+    [weightLog, allMeals, allWorkouts, bmr, activityLevel, dietGoal, bodyWeightKg, targetWeightKg]
+  );
+  const adapting = tdee.adaptiveWeight > 0 && tdee.targetCalories != null;
+
+  // WHICH NUMBER THE AUTO TARGET FOLLOWS
+  //
+  // Once the engine is actually calibrating, the target is its window average
+  // and stops moving with today's training. That is not a regression, it is the
+  // point: an empirically derived TDEE ALREADY contains a normal week's gym
+  // sessions, so adding today's on top would count them twice — and a budget
+  // that jumps 400 kcal on a leg day and back down on a rest day is not a
+  // budget you can plan a week of eating around.
+  //
+  // Before it calibrates, nothing changes: the old formula target, today's
+  // workout included, exactly as before.
+  const suggestedTarget = adapting ? tdee.targetCalories : formulaTarget;
   const suggestedMacros = suggestMacros({ calorieTarget: suggestedTarget, weightKg: bodyWeightKg, goal: dietGoal });
 
-  // With auto on, the target tracks the profile AND today's training — log a
-  // workout and the budget rises by what it actually cost.
   useEffect(() => {
     if (autoCalorieTarget && suggestedTarget != null && suggestedTarget !== calorieLimit) {
       setCalorieLimit(suggestedTarget);
@@ -657,6 +698,175 @@ export default function DietModule({ meals, setMeals, calorieLimit, setCalorieLi
           </>
         )}
       </div>
+
+      {/* 自适应 TDEE — the long view. The card above answers "today"; this one
+          answers "is what I'm doing actually working", which is a question only
+          weeks of weigh-ins and food logs can answer. See tdee.js. */}
+      {hasBodyProfile && (
+        <div className="glass-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Scale size={18} color="var(--color-diet)" /> 真实消耗 · 自动校准
+            </span>
+            {adapting && (
+              <span style={{
+                fontSize: '0.64rem', fontWeight: '700', padding: '2px 8px',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--color-diet-soft)', color: 'var(--color-diet)',
+              }}>
+                可信度 {tdee.confidence === 'high' ? '高' : tdee.confidence === 'medium' ? '中' : '低'}
+              </span>
+            )}
+          </div>
+
+          {!adapting ? (
+            <>
+              <div style={{ fontSize: '1.4rem', fontWeight: '800' }}>
+                {tdee.formulaTDEE} <span style={{ fontSize: '0.75rem', fontWeight: '500', color: 'var(--text-muted)' }}>kcal/天（公式估算）</span>
+              </div>
+              <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '6px', lineHeight: 1.6 }}>
+                {tdee.reason === 'few-weigh-ins' || tdee.reason === 'short-span'
+                  ? `还在用公式算。要校准成你真实的消耗，需要至少 3 次、跨度 10 天以上的体重记录（现在 ${tdee.trend.weighIns ?? 0} 次）—— 到健身页量一次就记一次。`
+                  : tdee.reason === 'stale-weigh-in'
+                    ? `体重记录停在 ${tdee.trend.staleDays} 天前了，太旧的趋势不拿来算今天的额度。再量一次就会重新校准。`
+                    : tdee.reason === 'no-food-log'
+                      ? '还在用公式算。要校准，还需要连续几周比较完整的饮食记录。'
+                      : tdee.reason === 'thin-food-log'
+                        ? `还在用公式算。这 ${tdee.windowDays} 天里只有 ${tdee.plausibleDays} 天的饮食记录看起来是完整的一天${tdee.partialDays > 0 ? `（另外 ${tdee.partialDays} 天只记了一半）` : ''} —— 记得太少的话，反推出来的消耗会偏低，宁可不算。`
+                        : '还在用公式算。'}
+              </p>
+            </>
+          ) : (
+            <>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+                <div style={{ fontSize: '1.9rem', fontWeight: '800', color: 'var(--color-diet)' }}>
+                  ≈ {tdee.effectiveTDEE}
+                </div>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>kcal/天</span>
+              </div>
+              <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '2px', lineHeight: 1.5 }}>
+                公式估 {tdee.formulaTDEE} · 体重反推 {tdee.actualTDEE} · 取了 {Math.round(tdee.adaptiveWeight * 100)}% 实测
+                {tdee.clamped && '（实测偏离太大，已收窄）'}
+              </p>
+
+              <div style={{
+                display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px',
+                marginTop: '0.85rem', fontSize: '0.72rem',
+              }}>
+                <div style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-sm)', padding: '8px 10px' }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.64rem' }}>平均吃进</div>
+                  <div style={{ fontWeight: '700', marginTop: '2px' }}>{tdee.avgIntake} kcal/天</div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', marginTop: '1px' }}>
+                    {tdee.plausibleDays} 天完整记录
+                  </div>
+                </div>
+                <div style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-sm)', padding: '8px 10px' }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.64rem' }}>体重趋势</div>
+                  <div style={{
+                    fontWeight: '700', marginTop: '2px',
+                    color: tdee.weeklyKg < 0 ? 'var(--color-money)' : tdee.weeklyKg > 0 ? 'var(--color-accent-red)' : 'inherit',
+                  }}>
+                    {tdee.weeklyKg > 0 ? '+' : ''}{tdee.weeklyKg} kg/周
+                  </div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', marginTop: '1px' }}>
+                    {tdee.trend.weighIns} 次称重
+                  </div>
+                </div>
+              </div>
+
+              {/* The sentence the whole card exists to be able to say. */}
+              <p style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '0.75rem', lineHeight: 1.6 }}>
+                照你现在这样吃，每天大约{' '}
+                <strong style={{ color: tdee.dailyDeficit > 0 ? 'var(--color-money)' : 'var(--color-accent-red)' }}>
+                  {tdee.dailyDeficit > 0 ? `少 ${tdee.dailyDeficit}` : `多 ${Math.abs(tdee.dailyDeficit)}`} kcal
+                </strong>
+                ，≈ {tdee.projectedWeeklyKg > 0 ? '+' : ''}{tdee.projectedWeeklyKg} kg/周。
+                {tdee.recommendedLoss && dietGoal === 'cut' && (
+                  <> 你这个体重，建议减重速度 {tdee.recommendedLoss.minKg}–{tdee.recommendedLoss.maxKg} kg/周。</>
+                )}
+              </p>
+
+              <p style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
+                平均摄入只算了看起来完整的那 {tdee.plausibleDays} 天，等于假设没记的日子吃得差不多。记得越齐，这个数字越准。
+              </p>
+            </>
+          )}
+
+          {/* Target weight + how long at the current rate. Only offered once
+              there is a trend to project along — an ETA computed from nothing
+              is just a made-up date. */}
+          <div style={{ marginTop: '0.9rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-glass)' }}>
+            {targetWeightKg ? (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: '600' }}>
+                    目标 {targetWeightKg} kg
+                    {tdee.currentWeightKg != null && (
+                      <span style={{ color: 'var(--text-muted)', fontWeight: '400' }}>
+                        {' '}· 现在 {tdee.currentWeightKg} kg
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    {tdee.goalProjection?.reached
+                      ? '已经到了'
+                      : tdee.goalProjection?.weeks != null
+                        ? `照这个趋势 ≈ ${tdee.goalProjection.weeks} 周（${tdee.goalProjection.etaDate}）`
+                        : tdee.goalProjection
+                          ? '现在的体重趋势到不了这个目标 — 先看上面那行'
+                          : '还没有足够的体重趋势来估时间'}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setTargetWeightKg(null)}
+                  style={{
+                    background: 'none', border: '1px solid var(--border-glass)', color: 'var(--text-muted)',
+                    padding: '5px 10px', borderRadius: 'var(--radius-sm)', fontSize: '0.68rem',
+                    cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+                  }}
+                >
+                  清除
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>目标体重</span>
+                <input
+                  type="number"
+                  step="0.1"
+                  inputMode="decimal"
+                  placeholder="kg"
+                  value={weightGoalDraft}
+                  onChange={(e) => setWeightGoalDraft(e.target.value)}
+                  style={{
+                    flex: 1, minWidth: 0, padding: '6px 10px', borderRadius: 'var(--radius-sm)',
+                    background: 'var(--bg-input)', border: '1px solid var(--border-glass)',
+                    color: 'white', fontSize: '0.78rem',
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    const kg = parseFloat(weightGoalDraft);
+                    if (Number.isFinite(kg) && kg > 0) {
+                      setTargetWeightKg(Math.round(kg * 10) / 10);
+                      setWeightGoalDraft('');
+                    }
+                  }}
+                  disabled={!weightGoalDraft.trim()}
+                  style={{
+                    background: 'var(--color-diet)', color: 'var(--color-diet-ink)', border: 'none',
+                    padding: '6px 12px', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem',
+                    fontWeight: '700', cursor: weightGoalDraft.trim() ? 'pointer' : 'default',
+                    opacity: weightGoalDraft.trim() ? 1 : 0.45, whiteSpace: 'nowrap',
+                  }}
+                >
+                  设定
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Today's Meals Section */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

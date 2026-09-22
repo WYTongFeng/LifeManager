@@ -35,7 +35,7 @@ export const DAILY_STATS_LOCAL_KEY = 'history';
  * cheaper than one read per item, and none of them can grow without bound.
  */
 export const META_DOCS = {
-  settings: ['calorieLimit', 'macroTargets', 'dailyBudget', 'userName', 'clipboardWatchEnabled', 'bodyWeightKg', 'weightUnit', 'ageYears', 'heightCm', 'sex', 'activityLevel', 'dietGoal', 'autoCalorieTarget', 'workoutPlace'],
+  settings: ['calorieLimit', 'macroTargets', 'dailyBudget', 'userName', 'clipboardWatchEnabled', 'bodyWeightKg', 'targetWeightKg', 'weightUnit', 'ageYears', 'heightCm', 'sex', 'activityLevel', 'dietGoal', 'autoCalorieTarget', 'workoutPlace'],
   // merchantShareTabs: the same idea as merchantCategories, one door down —
   // which 共摊本 a merchant usually belongs to, learned the same way. See
   // MoneyModule's teachShareTab and "suggest, don't decide" — a match here
