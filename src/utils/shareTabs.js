@@ -90,9 +90,95 @@ export function tabCycle(tab, expenses = [], cycle) {
   };
 }
 
-/** Every tab's cycle, skipping archived ones. */
+/**
+ * Every tab's cycle. Archived tabs drop out — but only once they are actually
+ * empty for this cycle.
+ *
+ * WHY THE SECOND HALF OF THAT SENTENCE EXISTS
+ * A plain `!t.archived` filter is a hole big enough to lose money through.
+ * `inShareTab` excludes a record from daily spend purely on `shareTabId != null`
+ * — it never looks at the tab — so archiving a tab mid-cycle left its records
+ * excluded from spending AND its net excluded from `budgetLinesForCycle`. The
+ * RM2,000 of rent that passed through it simply stopped existing anywhere in
+ * the month. Same family of bug as the earmark/share-tab double count, running
+ * the other way.
+ *
+ * Archiving means "stop offering this for new records", not "erase the month".
+ * So a tab that still has activity in this cycle keeps its card and its line in
+ * the budget, and disappears on its own the moment the cycle rolls past it.
+ */
 export function tabsForCycle(tabs = [], expenses = [], cycle) {
-  return tabs.filter(t => !t.archived).map(t => tabCycle(t, expenses, cycle));
+  return tabs
+    .filter(t => !t.archived || tabRecords(t, expenses, cycle).length > 0)
+    .map(t => tabCycle(t, expenses, cycle));
+}
+
+// --- managing the tabs themselves ------------------------------------------
+//
+// A tab could be created (inline, from the 记账 form) and then never renamed,
+// put away or removed — "我按进去不可以设置什么的吗，有点奇怪，然后也不可以
+// 取消，就删除不掉" (2026-09-22). `archived` was read in five places and
+// written by nothing.
+
+/** Rename a tab. Blank names are refused rather than saved as an empty card. */
+export function renameTab(tabs = [], tabId, label) {
+  const name = String(label ?? '').trim();
+  if (!name) return tabs;
+  return tabs.map(t => (String(t.id) === String(tabId) ? { ...t, label: name } : t));
+}
+
+/** Put a tab away, or bring it back. */
+export function setTabArchived(tabs = [], tabId, archived) {
+  return tabs.map(t => {
+    if (String(t.id) !== String(tabId)) return t;
+    if (!archived) {
+      const { archived: _drop, ...rest } = t;
+      return rest;
+    }
+    return { ...t, archived: true };
+  });
+}
+
+/**
+ * How many records have EVER been filed under this tab — the whole ledger, not
+ * one cycle. What decides whether deleting it is a safe thing to offer.
+ */
+export function tabRecordCount(tab, expenses = []) {
+  if (tab?.id == null) return 0;
+  return expenses.filter(e => inShareTab(e) && String(e.shareTabId) === String(tab.id)).length;
+}
+
+/**
+ * Delete a tab outright.
+ *
+ * ONLY SAFE WHEN NOTHING POINTS AT IT. A record carries `shareTabId`, and
+ * `inShareTab` keeps it out of daily spend on the strength of that field alone.
+ * Delete the tab underneath and those records are excluded from spending by a
+ * tab that no longer exists to net them — money that is in the ledger and in no
+ * total. So this refuses, and the caller offers 封存 instead; `detachTabRecords`
+ * is the honest way to empty a tab first.
+ */
+export function deleteTab(tabs = [], tabId, expenses = []) {
+  const tab = tabs.find(t => String(t.id) === String(tabId));
+  if (!tab) return { tabs, deleted: false, blockedBy: 0 };
+  const count = tabRecordCount(tab, expenses);
+  if (count > 0) return { tabs, deleted: false, blockedBy: count };
+  return { tabs: tabs.filter(t => String(t.id) !== String(tabId)), deleted: true, blockedBy: 0 };
+}
+
+/**
+ * Every record in this tab, with the tab link removed — they go back to being
+ * ordinary spending and income. Returns the CHANGED records only, so the caller
+ * can save them one at a time through the real save path (see the today-slice
+ * setter trap: `setExpenses` silently no-ops on anything not dated today).
+ *
+ * `shareTabBillId` goes with it: a bill link pointing into a tab the record no
+ * longer belongs to is the same dangling-pointer bug one level down.
+ */
+export function detachTabRecords(tabId, expenses = []) {
+  return expenses
+    .filter(e => inShareTab(e) && String(e.shareTabId) === String(tabId))
+    .map(e => ({ ...e, shareTabId: null, shareTabBillId: null }));
 }
 
 /**

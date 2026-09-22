@@ -53,7 +53,7 @@ const INCOME_KINDS = [
  * The daily figure is derived, never typed. A budget you set yourself is a wish;
  * this one is arithmetic on money that actually exists.
  */
-export default function CycleView({ expenses = [], onApproveExpense, onAddExpense, onOpenCategory }) {
+export default function CycleView({ expenses = [], onApproveExpense, onAddExpense, onOpenCategory, onManageShareTabs }) {
   // Live-read + saveJSON, not usePersistentState. Both keys have a second
   // writer now: 记账 files an arrival against an income source, and marks a
   // logged payment as a fixed bill. Two usePersistentState instances for one
@@ -1085,6 +1085,22 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
             <strong>少的算支出</strong>（上面的固定开销里面有它），
             <strong>多的算收入</strong>。要加东西进去，在「今天」记账时选共摊本。
           </p>
+          {/* These rows are a read-out; the tab itself is edited on 今天. Said
+              out loud with a button, because tapping a row here and having
+              nothing happen is what sent him looking for the setting in the
+              first place. */}
+          {onManageShareTabs && (
+            <button
+              type="button"
+              onClick={onManageShareTabs}
+              style={{
+                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                color: 'var(--color-money)', fontSize: '0.68rem', fontWeight: '700',
+              }}
+            >
+              改名 / 封存 / 删掉 — 去「今天」的共摊本卡片 →
+            </button>
+          )}
         </Section>
       )}
 

@@ -39,6 +39,7 @@ import { tabsForCycle, contributors, outgoings } from '../utils/shareTabs';
 import ReclassifyCenter from './ReclassifyCenter';
 import ShareTabSettle from './ShareTabSettle';
 import ShareTabBills from './ShareTabBills';
+import ShareTabSettings from './ShareTabSettings';
 import { OWNERSHIP } from '../utils/recordOwnership';
 
 const inputStyle = {
@@ -270,6 +271,10 @@ export default function MoneyModule({
   // pre-selected", since that's the question that card itself raises.
   const [showReclassify, setShowReclassify] = useState(false);
   const [reclassifyPrefill, setReclassifyPrefill] = useState(null);
+  // Which 共摊本 has its 设置 panel open. One at a time — the panel carries
+  // destructive actions behind confirmations, and two of them expanded at once
+  // is two half-read warnings on one screen.
+  const [openTabSettings, setOpenTabSettings] = useState(null);
   // Over the WHOLE ledger, not this cycle: the question behind the tap is
   // "我买菜到底花了多少", and an answer silently cut off at the 1st of the
   // month is a different, smaller answer wearing the same label.
@@ -313,6 +318,19 @@ export default function MoneyModule({
         || shareTabs.find(st => String(st.id) === String(t.id))?.bills?.length > 0),
     [shareTabs, allExpenses, expenses, moneyCycle]
   );
+
+  // Tabs with no card this cycle — nothing in them, no bills, or archived.
+  //
+  // They need somewhere to exist or they are unreachable, which is half of
+  // "就删除不掉": open a tab by mistake from the 记账 form, never put
+  // anything in it, and it has no card, so there is no screen anywhere in the
+  // app that can rename or remove it — while it still fills a slot in every
+  // picker. Listed quietly below the real cards, not as more cards: a dormant
+  // tab is bookkeeping, not this month's news.
+  const dormantTabs = useMemo(() => {
+    const live = new Set(shareCycles.map(t => String(t.id)));
+    return shareTabs.filter(t => !live.has(String(t.id)));
+  }, [shareTabs, shareCycles]);
   const projectsById = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
   // What each expense actually cost THIS user — a closed project counts only
   // the share nobody paid back. Built once here rather than per row.
@@ -1115,6 +1133,7 @@ export default function MoneyModule({
           // 归类中心 is mounted here, not in CycleView — one instance, opened
           // from whichever screen the thought occurs on.
           onOpenCategory={openReclassifyForCategory}
+          onManageShareTabs={() => setView('today')}
         />
       ) : (
       <>
@@ -1528,24 +1547,55 @@ export default function MoneyModule({
           deliberately shown as ONE net figure with the two gross halves under
           it: 「结果才算，中间不用算」. A tab with nothing in it this cycle is
           absent rather than a row of zeros. */}
-      {shareCycles.length > 0 && (
+      {(shareCycles.length > 0 || dormantTabs.length > 0) && (
         <div>
           <h3 style={{ fontSize: '1rem', fontWeight: '700', marginBottom: '0.75rem' }}>共摊本</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {shareCycles.map(t => {
               const paidBy = contributors({ id: t.id }, allExpenses ?? expenses, moneyCycle);
               const bills = outgoings({ id: t.id }, allExpenses ?? expenses, moneyCycle);
-              // `t` is the resolved cycle (net, rows, …) — ShareTabBills needs
-              // the raw tab object underneath it for its own `.bills` list.
+              // `t` is the resolved cycle (net, rows, …) — the card header,
+              // ShareTabSettings and ShareTabBills all need the raw tab object
+              // underneath it (its `.bills` list, its `archived` flag).
               const rawTab = shareTabs.find(st => String(st.id) === String(t.id));
               return (
                 <div key={t.id} className="glass-card" style={{ padding: '0.85rem 1rem' }}>
+                  {/* THE NAME IS THE BUTTON. He tapped the card expecting to be
+                      able to change something about the tab and nothing
+                      happened — there was no rename, no archive and no delete
+                      anywhere in the app. See ShareTabSettings. */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
-                    <span style={{ fontSize: '0.88rem', fontWeight: '700' }}>{t.label}</span>
+                    <button
+                      type="button"
+                      onClick={() => setOpenTabSettings(openTabSettings === t.id ? null : t.id)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '5px', padding: 0,
+                        background: 'none', border: 'none', cursor: 'pointer',
+                        color: 'var(--text-primary)', fontSize: '0.88rem', fontWeight: '700',
+                      }}
+                    >
+                      {t.label}
+                      {rawTab?.archived && (
+                        <span style={{ fontSize: '0.6rem', fontWeight: '600', color: 'var(--color-accent-amber)' }}>
+                          已封存
+                        </span>
+                      )}
+                      <Pencil size={11} style={{ color: 'var(--text-muted)' }} />
+                    </button>
                     <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
                       {Number(moneyCycle.start.slice(5, 7))} 月
                     </span>
                   </div>
+
+                  {openTabSettings === t.id && rawTab && (
+                    <ShareTabSettings
+                      tab={rawTab}
+                      shareTabs={shareTabs}
+                      expenses={allExpenses ?? expenses}
+                      onSaveExpense={onSaveExpense}
+                      onClose={() => setOpenTabSettings(null)}
+                    />
+                  )}
 
                   {/* The one number. Everything else on this card explains it. */}
                   <div style={{ marginTop: '8px', display: 'flex', alignItems: 'baseline', gap: '8px' }}>
@@ -1628,10 +1678,57 @@ export default function MoneyModule({
               );
             })}
           </div>
-          <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '9px', lineHeight: 1.5 }}>
-            里面每一笔<strong>单独都不算数</strong>。只有上面那个净额进这个月的帐 ——
-            少的算支出，多的算收入。下个月他们补上，那笔钱就推高下个月的净额，自己补回来。
-          </p>
+          {shareCycles.length > 0 && (
+            <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '9px', lineHeight: 1.5 }}>
+              里面每一笔<strong>单独都不算数</strong>。只有上面那个净额进这个月的帐 ——
+              少的算支出，多的算收入。下个月他们补上，那笔钱就推高下个月的净额，自己补回来。
+            </p>
+          )}
+
+          {/* Dormant tabs. Every one of these still occupies a row in the 记账
+              picker, so every one of them needs to be reachable — that is the
+              whole reason this list exists. Same 设置 panel as a live card. */}
+          {dormantTabs.length > 0 && (
+            <div style={{ marginTop: shareCycles.length > 0 ? '12px' : 0 }}>
+              <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', margin: '0 0 6px', lineHeight: 1.5 }}>
+                这个月没动过的本子（{dormantTabs.length}）— 点名字可以改名、封存或者删掉。
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {dormantTabs.map(rawTab => (
+                  <div key={rawTab.id} className="glass-card" style={{ padding: '0.6rem 0.8rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => setOpenTabSettings(openTabSettings === rawTab.id ? null : rawTab.id)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '6px', width: '100%',
+                        padding: 0, background: 'none', border: 'none', cursor: 'pointer',
+                        textAlign: 'left', color: 'var(--text-secondary)', fontSize: '0.76rem', fontWeight: '700',
+                      }}
+                    >
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {rawTab.label ?? '没名字的共摊本'}
+                      </span>
+                      {rawTab.archived && (
+                        <span style={{ fontSize: '0.6rem', fontWeight: '600', color: 'var(--color-accent-amber)' }}>
+                          已封存
+                        </span>
+                      )}
+                      <Pencil size={11} style={{ color: 'var(--text-muted)' }} />
+                    </button>
+                    {openTabSettings === rawTab.id && (
+                      <ShareTabSettings
+                        tab={rawTab}
+                        shareTabs={shareTabs}
+                        expenses={allExpenses ?? expenses}
+                        onSaveExpense={onSaveExpense}
+                        onClose={() => setOpenTabSettings(null)}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

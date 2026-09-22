@@ -12,6 +12,7 @@ import {
   inShareTab, tabRecords, tabCycle, tabsForCycle, budgetLinesForCycle,
   contributors, outgoings, isSettled, setSettled, unsettledCycles, settledCycles,
   addTabBill, updateTabBill, removeTabBill, billsStatus,
+  renameTab, setTabArchived, tabRecordCount, deleteTab, detachTabRecords,
 } from '../src/utils/shareTabs.js';
 import { getCycle, getPreviousCycle, computeCycleBudget } from '../src/utils/cycle.js';
 import { isDailySpend, isRealSpend, isSpendingRecord } from '../src/utils/accounts.js';
@@ -78,8 +79,14 @@ check('...and that is income, not negative spending', [o.isIncome, o.ownShare], 
 
 check('a cycle with nothing in the tab is absent, not a RM0 commitment',
   budgetLinesForCycle([tab], sept, getCycle(new Date(2026, 11, 20))), []);
-check('an archived tab is left out entirely',
-  tabsForCycle([{ ...tab, archived: true }], sept, cycle), []);
+// Archiving means "stop offering this for new records", NOT "erase the month".
+// A tab archived while this cycle's rent is still sitting in it keeps its card
+// and its budget line — see tabsForCycle. It drops out once the cycle it was
+// used in is behind us, which is what the second check here is.
+check('an archived tab that still holds THIS cycle\'s records is not dropped',
+  tabsForCycle([{ ...tab, archived: true }], sept, cycle).map(t => t.id), [tab.id]);
+check('an archived tab with nothing in this cycle is left out entirely',
+  tabsForCycle([{ ...tab, archived: true }], [], cycle), []);
 
 // --- who paid ---------------------------------------------------------------
 // Reported, never planned: he was asked for a list of expected shares and said
@@ -312,6 +319,64 @@ check('a different cycle sees no payment at all',
   billsStatus(billTab, paidThisCycle, next).find(b => b.id === 'b1').paid, false);
 check('removed bills are simply absent from status, not reported broken',
   billsStatus(oneLeft[0], paidThisCycle, cycle).map(b => b.id), ['b1']);
+
+
+// --- managing the tab itself ----------------------------------------------
+//
+// "我按进去不可以设置什么的吗，有点奇怪，然后也不可以取消，就删除不掉"
+// (2026-09-22). `archived` was read in five places and written by none, and
+// there was no rename and no delete at all.
+
+const mgmt = [{ id: 't1', label: '房友共摊' }, { id: 't2', label: '旅行共摊' }];
+
+check('rename changes just that tab', renameTab(mgmt, 't1', '室友共摊').map(t => t.label),
+  ['室友共摊', '旅行共摊']);
+check('a blank name is refused rather than saved', renameTab(mgmt, 't1', '   '), mgmt);
+check('renaming an unknown id is a no-op', renameTab(mgmt, 'nope', 'x'), mgmt);
+
+check('archiving sets the flag', setTabArchived(mgmt, 't2', true)[1].archived, true);
+check('...and un-archiving REMOVES it rather than storing false',
+  Object.prototype.hasOwnProperty.call(setTabArchived(setTabArchived(mgmt, 't2', true), 't2', false)[1], 'archived'),
+  false);
+
+// THE TRAP THIS CLOSES. `inShareTab` keeps a record out of daily spend on
+// `shareTabId != null` alone — it never looks at the tab. So a `!t.archived`
+// filter in tabsForCycle meant archiving a tab mid-cycle excluded its records
+// from spending AND its net from the budget: the money existed nowhere.
+const liveTab = { id: 't1', label: '房友共摊' };
+const liveRows = [
+  { id: 'r1', date: '2026-09-05', merchant: '房租', amount: 2000, shareTabId: 't1' },
+  { id: 'r2', date: '2026-09-06', merchant: '阿强', amount: -1600, shareTabId: 't1' },
+];
+const mgmtCycle = getCycle(new Date('2026-09-22T09:00:00'));
+const archivedLive = setTabArchived([liveTab], 't1', true);
+check('an archived tab that still has records THIS cycle keeps its card',
+  tabsForCycle(archivedLive, liveRows, mgmtCycle).map(t => t.id), ['t1']);
+check('...and its net is still handed to the budget — the money cannot vanish',
+  budgetLinesForCycle(archivedLive, liveRows, mgmtCycle).map(l => l.net), [-400]);
+check('...while an archived tab with nothing in this cycle really is gone',
+  tabsForCycle(archivedLive, [], mgmtCycle).map(t => t.id), []);
+
+check('counting looks at the whole ledger, not one cycle',
+  tabRecordCount(liveTab, [...liveRows, { id: 'r3', date: '2026-07-01', amount: 50, shareTabId: 't1' }]), 3);
+check('a record in a DIFFERENT tab is not counted',
+  tabRecordCount(liveTab, [{ id: 'r9', date: '2026-09-01', amount: 10, shareTabId: 't2' }]), 0);
+
+const blocked = deleteTab([liveTab], 't1', liveRows);
+check('deleting a tab that still owns records is refused', blocked.deleted, false);
+check('...and says how many are in the way', blocked.blockedBy, 2);
+check('...leaving the list untouched', blocked.tabs.map(t => t.id), ['t1']);
+
+const gone = deleteTab(mgmt, 't2', liveRows);
+check('an empty tab deletes cleanly', [gone.deleted, gone.tabs.map(t => t.id)], [true, ['t1']]);
+
+const detached = detachTabRecords('t1', liveRows);
+check('detaching returns only the records that changed', detached.map(e => e.id), ['r1', 'r2']);
+check('...with both tab links cleared, not just the tab one',
+  detached.map(e => [e.shareTabId, e.shareTabBillId]), [[null, null], [null, null]]);
+check('...so they are ordinary records again', detached.map(inShareTab), [false, false]);
+check('...and the rent among them counts as real spending once more',
+  detached.filter(e => isDailySpend(e) && e.amount > 0).map(e => e.id), ['r1']);
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : fail + ' FAILED'}  (${pass} passed)`);
 if (fail > 0) process.exit(1);
