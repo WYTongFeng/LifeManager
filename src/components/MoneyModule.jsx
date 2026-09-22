@@ -22,7 +22,7 @@ import TextExportModal from './TextExportModal';
 import {
   parseTngNotification, categorise, merchantKey, SAMPLE_NOTIFICATIONS
 } from '../utils/tngParser';
-import { CategorySelect, CategoryText, useMoneyCategories } from './CategoryPicker';
+import { CategorySelect, CategoryChips, CategoryText, useMoneyCategories } from './CategoryPicker';
 import CategoryManager from './CategoryManager';
 import {
   FALLBACK_EXPENSE_CATEGORY, FALLBACK_INCOME_CATEGORY, resolveCategoryId, categoryKindFor,
@@ -270,6 +270,13 @@ export default function MoneyModule({
   // pre-selected", since that's the question that card itself raises.
   const [showReclassify, setShowReclassify] = useState(false);
   const [reclassifyPrefill, setReclassifyPrefill] = useState(null);
+  // Over the WHOLE ledger, not this cycle: the question behind the tap is
+  // "我买菜到底花了多少", and an answer silently cut off at the 1st of the
+  // month is a different, smaller answer wearing the same label.
+  const openReclassifyForCategory = (categoryId) => {
+    setReclassifyPrefill({ category: categoryId, range: 'all' });
+    setShowReclassify(true);
+  };
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [tFrom, setTFrom] = useState(null);
   const [tTo, setTTo] = useState(null);
@@ -414,6 +421,35 @@ export default function MoneyModule({
       return formCategoryOptions.some(c => c.id === id) ? id : fallback;
     });
   }, [formCategoryKind, formCategoryOptions]);
+
+  // WHICH CATEGORIES HE ACTUALLY USES, most-used first.
+  //
+  // Feeds the one-tap chips above both pickers. Counted, not amount-weighted:
+  // one RM1,200 rent payment a month should not outrank the 买菜 run he makes
+  // twice a week, because this is deciding which buttons are worth a thumb.
+  //
+  // The whole ledger rather than this cycle — a chip row that reshuffles on
+  // the 1st of the month would move the target out from under him.
+  const categoryUsageOrder = useMemo(() => {
+    const counts = new Map();
+    for (const e of (allExpenses ?? expenses ?? [])) {
+      if (isTransferRecord(e)) continue;
+      const kind = categoryKindFor(txType(e));
+      const id = resolveCategoryId(e.category, kind);
+      const key = `${kind}:${id}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const rank = (kind) => [...counts.entries()]
+      .filter(([k]) => k.startsWith(`${kind}:`))
+      .sort((x, y) => y[1] - x[1])
+      .map(([k]) => k.slice(kind.length + 1))
+      // 其他 is almost always the most-used id — that is the bug being fixed,
+      // not a preference — and promoting it to the first chip would make the
+      // wrong answer the easiest one to tap. It stays available in the list
+      // underneath, where a genuine "no idea" still reaches it.
+      .filter(id => id !== FALLBACK_EXPENSE_CATEGORY && id !== FALLBACK_INCOME_CATEGORY);
+    return { expense: rank('expense'), income: rank('income') };
+  }, [allExpenses, expenses]);
 
   // A transfer to a person, or a shop no rule recognises, tells you the amount
   // but not what it bought — so the note is required before it can be logged.
@@ -1076,6 +1112,9 @@ export default function MoneyModule({
           // repaysDebtId link) so it is added as-is rather than being filled
           // in here. It carries its own date, which useTodayRecords preserves.
           onAddExpense={(record) => setExpenses([record, ...expenses])}
+          // 归类中心 is mounted here, not in CycleView — one instance, opened
+          // from whichever screen the thought occurs on.
+          onOpenCategory={openReclassifyForCategory}
         />
       ) : (
       <>
@@ -1406,7 +1445,7 @@ export default function MoneyModule({
       {categoryBreakdown.length > 0 && (
         <div className="glass-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>今天花在哪几类</span>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>今天花在哪几类 · 点一类看全部</span>
             <button
               onClick={() => setShowCategoryManager(true)}
               className="btn-secondary"
@@ -1416,8 +1455,21 @@ export default function MoneyModule({
             </button>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {/* A row is a button into 归类中心, filtered to this category over
+                the whole ledger. Two jobs at once: "how much have I ever spent
+                on 买菜" is one tap from the place the question occurs, and a
+                fat 其他 row becomes the way INTO fixing it rather than a dead
+                end that just restates the problem. */}
             {categoryBreakdown.map((c) => (
-              <div key={c.category}>
+              <button
+                key={c.category}
+                type="button"
+                onClick={() => openReclassifyForCategory(c.category)}
+                style={{
+                  display: 'block', width: '100%', textAlign: 'left', padding: 0,
+                  background: 'none', border: 'none', color: 'inherit', cursor: 'pointer',
+                }}
+              >
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '3px' }}>
                   <CategoryText value={c.category} style={{ color: 'var(--text-primary)' }} />
                   <span style={{ color: 'var(--text-secondary)' }}>RM {c.total.toFixed(2)} ({Math.round((c.total / totalPositiveSpend) * 100)}%)</span>
@@ -1425,7 +1477,7 @@ export default function MoneyModule({
                 <div style={{ height: '5px', background: 'var(--border-glass)', borderRadius: 'var(--radius-sm)' }}>
                   <div style={{ height: '100%', width: `${(c.total / totalPositiveSpend) * 100}%`, background: 'var(--color-money)', borderRadius: 'var(--radius-sm)' }}></div>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -2220,6 +2272,12 @@ export default function MoneyModule({
                     管理分类
                   </button>
                 </div>
+                <CategoryChips
+                  txType={formTxType}
+                  value={formCategory}
+                  onChange={setFormCategory}
+                  order={categoryUsageOrder[formCategoryKind]}
+                />
                 <CategorySelect
                   txType={formTxType}
                   value={formCategory}
@@ -2750,18 +2808,6 @@ export default function MoneyModule({
 
       {showTextExport && <TextExportModal onClose={() => setShowTextExport(false)} />}
 
-      {showReclassify && (
-        <ReclassifyCenter
-          expenses={allExpenses ?? expenses}
-          shareTabs={shareTabs}
-          cycle={moneyCycle}
-          onSaveExpense={onSaveExpense}
-          onClose={() => { setShowReclassify(false); setReclassifyPrefill(null); }}
-          initialOwnership={reclassifyPrefill?.ownership ?? ''}
-          initialShareTabId={reclassifyPrefill?.shareTabId ?? ''}
-        />
-      )}
-
       {/* Transfer modal */}
       {showTransferModal && (
         <div className="modal-overlay" onClick={() => setShowTransferModal(false)}>
@@ -2951,6 +2997,12 @@ export default function MoneyModule({
                       {/* Always the expense list: the reader only ever offers
                           to log a `spend` verdict — an income notification is
                           reported, never turned into a record here. */}
+                      <CategoryChips
+                        txType="expense"
+                        value={readerCategory}
+                        onChange={setReaderCategory}
+                        order={categoryUsageOrder.expense}
+                      />
                       <CategorySelect
                         txType="expense"
                         value={readerCategory}
@@ -3103,6 +3155,23 @@ export default function MoneyModule({
       </>
       )}
 
+      {/* 归类中心 lives OUTSIDE the today/cycle/accounts branch on purpose: it
+          is opened from all three now (the 分类 breakdown here, the 其他 slice
+          in 本月), and while it sat inside the today branch every one of those
+          buttons set a flag that rendered nothing. */}
+      {showReclassify && (
+        <ReclassifyCenter
+          expenses={allExpenses ?? expenses}
+          shareTabs={shareTabs}
+          cycle={moneyCycle}
+          onSaveExpense={onSaveExpense}
+          onClose={() => { setShowReclassify(false); setReclassifyPrefill(null); }}
+          initialOwnership={reclassifyPrefill?.ownership ?? ''}
+          initialShareTabId={reclassifyPrefill?.shareTabId ?? ''}
+          initialCategory={reclassifyPrefill?.category ?? ''}
+          initialRange={reclassifyPrefill?.range ?? 'cycle'}
+        />
+      )}
     </div>
   );
 }

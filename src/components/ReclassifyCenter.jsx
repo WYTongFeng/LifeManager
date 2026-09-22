@@ -49,13 +49,18 @@ function toggleGroupBtn(active) {
 export default function ReclassifyCenter({
   expenses, shareTabs, cycle, onSaveExpense, onClose,
   initialOwnership = '', initialShareTabId = '',
+  initialCategory = '', initialRange = 'cycle',
 }) {
-  const [rangeMode, setRangeMode] = useState('cycle'); // 'cycle' | 'prev' | 'all' | 'custom'
+  // `initialRange` matters as much as the filter it comes with. Opening from
+  // a 其他 slice means "show me everything filed under this" — scoping that
+  // to the current cycle answers a narrower question than the one that was
+  // asked, and does it silently.
+  const [rangeMode, setRangeMode] = useState(initialRange); // 'cycle' | 'prev' | 'all' | 'custom'
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [direction, setDirection] = useState('all'); // 'all' | 'out' | 'in'
   const [ownershipFilter, setOwnershipFilter] = useState(initialOwnership);
-  const [categoryFilter, setCategoryFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState(initialCategory ? String(initialCategory) : '');
   const [merchantQuery, setMerchantQuery] = useState('');
   const [selected, setSelected] = useState(() => new Set());
   const [openAction, setOpenAction] = useState(null); // null | 'toTab' | 'fromTab' | 'category'

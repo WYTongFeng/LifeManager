@@ -114,6 +114,19 @@ const cases = [
   ["付款\n您已支付了RM4.00给EDISIJUTA PARKING SDN BHD。", 'spend', 4, 'Edisijuta Parking', false, 'transport'],
   ["扣款通知\nRM12.00 已从您的 TNG eWallet 余额中扣除。", 'spend', 12, null, true, 'other'],
   ["汇款成功\nRM 20.00已成功汇款到 TAN MEI LING。", 'spend', 20, 'Tan Mei Ling', true, 'transfer-person'],
+
+  // --- 买菜 -----------------------------------------------------------------
+  // "全部都在其他，我要看买菜多少钱都看不到" (2026-09-22). The groceries rule
+  // knew supermarket chains and nothing else, so the places he actually buys
+  // food landed in 其他 — and the category he most wanted a number for never
+  // had one. Each line below is a shape that used to fall through.
+  ["Payment successful. You have paid RM32.80 to PASAR BORONG SELAYANG on 20/09/2026.", 'spend', 32.8, 'Pasar Borong Selayang', false, 'groceries'],
+  ["付款成功\n您已支付了 NSK TRADE CITY RM88.40", 'spend', 88.4, 'Nsk Trade City', false, 'groceries'],
+  ["付款成功\n您已支付了 菜市场 RM25.00", 'spend', 25, '菜市场', false, 'groceries'],
+  ["Payment successful. You have paid RM15.00 to SEGI FRESH SETAPAK on 20/09/2026.", 'spend', 15, 'Segi Fresh Setapak', false, 'groceries'],
+  // ...and the guard that keeps it honest: bare "market" is not a keyword,
+  // because half the companies in Malaysia are called "… MARKETING SDN BHD".
+  ["付款\n您已支付了RM120.00给SUNWAY MARKETING SDN BHD。", 'spend', 120, 'Sunway Marketing', true, 'other'],
 ];
 let bad=0;
 console.log('     kind     amt     purpose  category            merchant');

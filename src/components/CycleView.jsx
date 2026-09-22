@@ -53,7 +53,7 @@ const INCOME_KINDS = [
  * The daily figure is derived, never typed. A budget you set yourself is a wish;
  * this one is arithmetic on money that actually exists.
  */
-export default function CycleView({ expenses = [], onApproveExpense, onAddExpense }) {
+export default function CycleView({ expenses = [], onApproveExpense, onAddExpense, onOpenCategory }) {
   // Live-read + saveJSON, not usePersistentState. Both keys have a second
   // writer now: 记账 files an arrival against an income source, and marks a
   // logged payment as a fixed bill. Two usePersistentState instances for one
@@ -307,6 +307,13 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
     }
     return totals.sort((a, b) => b.total - a.total);
   }, [expenses, cycle, cycleOwnSpendMap]);
+
+  // How much of the month is sitting in 其他. Read off the same breakdown the
+  // circle is drawn from, so the two can never disagree about it.
+  const uncategorised = useMemo(() => {
+    const row = cycleCategoryBreakdown.find(c => c.category === 'other');
+    return { total: row ? row.total : 0, count: row ? row.records.length : 0 };
+  }, [cycleCategoryBreakdown]);
 
   // "我的钱去哪里了" — the whole cycle in one circle, not just the shopping.
   //
@@ -737,6 +744,34 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
             <p style={{ fontSize: '0.66rem', color: 'var(--color-accent-red)', marginTop: '10px', lineHeight: 1.5 }}>
               这个圈比收入还大 — 超出 {money(Math.abs(budget.netThisCycle))}，就是这个月亏的部分。
             </p>
+          )}
+
+          {/* 其他 IS THE PROBLEM, SO IT GETS THE BUTTON.
+              "全部都在其他，我要看买菜多少钱都看不到" — a big 其他 slice is not a
+              fact about his spending, it is a backlog of records nobody ever
+              told the app what they were. The chart used to report it and stop
+              there. Now it is the way in: one tap opens 归类中心 on exactly
+              those records, where they can be re-filed in bulk — and the
+              month's 买菜 number exists the moment that is done.
+
+              Only when it is actually worth a trip: a couple of stray records
+              at the bottom of the legend is not a backlog, and a button that
+              nags about them every month is one he stops seeing. */}
+          {onOpenCategory && uncategorised.count >= 3 && (
+            <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border-glass)' }}>
+              <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)', margin: '0 0 8px', lineHeight: 1.5 }}>
+                这个月有 <strong style={{ color: 'var(--color-accent-amber)' }}>{money(uncategorised.total)}</strong>（{uncategorised.count} 笔）
+                落在「其他」— app 不知道那是什么，所以买菜、吃饭这些分开的数字才凑不出来。
+              </p>
+              <button
+                type="button"
+                onClick={() => onOpenCategory('other')}
+                className="btn-secondary"
+                style={{ padding: '7px 12px', fontSize: '0.74rem' }}
+              >
+                把「其他」分清楚
+              </button>
+            </div>
           )}
         </div>
       )}

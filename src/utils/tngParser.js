@@ -335,10 +335,24 @@ const CATEGORY_RULES = [
     // existing 'parking' keyword never fired on any of them.
     'kpm lot', 'car park', 'carpark', 'kompleks parking',
     '交通', '停车', '过路费']],
+  // 买菜. The list started as supermarket chains only, which is not where this
+  // user actually buys food — a 巴刹 stall, a 菜市场 run, or a merchant that
+  // simply calls itself PASAR RAYA all fell through to 其他, and 买菜 ended up
+  // being the one category he most wanted a number for and never had one.
+  //
+  // NB 'market' is NOT a keyword on its own: "… MARKETING SDN BHD" is an
+  // extremely common Malaysian company suffix and it would file every one of
+  // them as groceries. Only the phrases where the word really means a market.
   ['groceries', ['grocer', 'tesco', 'lotus', 'giant', 'aeon', 'mydin', 'econsave', 'speedmart',
     'hero market', 'supermarket', 'sundry', 'family mart', 'familymart', '7-eleven', '7 eleven',
     'kk super', 'kk mart', 'mynews', 'cold storage', 'jaya grocer', 'village grocer',
-    '超市', '杂货']],
+    // Wet markets and the way they get typed, in all three languages he uses.
+    'pasar', 'wet market', 'fresh market', 'night market', 'mini market', 'minimarket',
+    'mini mart', 'minimart', 'runcit', 'butcher', 'greengrocer',
+    // Chains that are groceries but say nothing groceries-ish in the name.
+    'nsk', 'billion', 'segi fresh', 'tf value', 'tf mart', 'milimewa', 'everrise',
+    'bataras', 'independent grocer', 'lulu hypermarket', 'hypermarket', 'sogo super',
+    '超市', '杂货', '买菜', '菜市', '巴刹', '生鲜', '蔬菜', '青菜', '水果', '肉店', '鱼档', '菜档']],
   ['health', ['clinic', 'klinik', 'pharmacy', 'farmasi', 'hospital', 'dental', 'pergigian',
     'caring', 'big pharmacy', 'alpro', 'poliklinik', '诊所', '药房', '医院']],
   ['personal-care', ['salon', 'hair studio', 'hairdresser', 'barber', 'haircut', 'nail',

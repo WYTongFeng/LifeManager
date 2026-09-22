@@ -61,6 +61,75 @@ export function CategorySelect({ txType = 'expense', value, onChange, style, id 
 }
 
 /**
+ * The same question as a row of one-tap chips.
+ *
+ * WHY THIS EXISTS ALONGSIDE THE SELECT
+ * "全部都在其他，我要看买菜多少钱都看不到" (2026-09-22). The picker was a
+ * 25-item native `<select>` that opens defaulted to 其他 — which sits LAST in
+ * the list, so choosing anything at all meant opening a wheel and scrolling.
+ * Logging a spend is something this user does several times a day with one
+ * hand, and a category that costs a scroll is a category that doesn't get set.
+ * The pie then honestly reported what was on disk: one enormous 其他 slice.
+ *
+ * So the handful he actually uses are chips, one tap each, and the full list
+ * stays underneath for everything else. `order` is his own usage history, not
+ * a guess baked in here — the component stays dumb about what "common" means.
+ */
+export function CategoryChips({ txType = 'expense', value, onChange, order = [], limit = 8 }) {
+  const kind = categoryKindFor(txType);
+  const { categories } = useMoneyCategories(kind);
+  const current = resolveCategoryId(value, kind);
+
+  const shown = useMemo(() => {
+    const byId = new Map(categories.map(c => [c.id, c]));
+    const picked = [];
+    const take = (id) => {
+      const c = byId.get(id);
+      if (c && !picked.some(p => p.id === c.id)) picked.push(c);
+    };
+    // His own most-used first, then the list's own order fills the rest — a
+    // fresh install has no history and still needs usable chips.
+    order.forEach(take);
+    categories.forEach(c => { if (picked.length < limit) take(c.id); });
+    const head = picked.slice(0, limit);
+    // The current pick is always visible, even when it is rare enough to have
+    // missed the cut — a chip row that doesn't show what is selected reads as
+    // "nothing is selected" and invites a second, wrong tap.
+    if (!head.some(c => c.id === current)) {
+      const c = byId.get(current);
+      if (c) head[head.length - 1] = c;
+    }
+    return head;
+  }, [categories, order, limit, current]);
+
+  if (shown.length === 0) return null;
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '7px' }}>
+      {shown.map(c => {
+        const on = c.id === current;
+        return (
+          <button
+            key={c.id}
+            type="button"
+            onClick={() => onChange(c.id)}
+            style={{
+              padding: '5px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+              background: on ? 'var(--color-money-soft)' : 'var(--bg-card)',
+              border: `1px solid ${on ? 'var(--color-money)' : 'var(--border-glass)'}`,
+              color: on ? 'var(--color-money)' : 'var(--text-secondary)',
+              fontSize: '0.72rem', fontWeight: on ? '700' : '600', whiteSpace: 'nowrap',
+            }}
+          >
+            {c.emoji} {c.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * A category as text, for lists and chips.
  *
  * Takes the raw stored value — legacy English strings included — so no call
