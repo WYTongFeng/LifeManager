@@ -12,6 +12,7 @@ import {
   notePreview, checklistProgress, isBlankNote, searchNotes, groupNotes,
   countByCategory, CATEGORY_EMOJI, FALLBACK_CATEGORY,
 } from '../utils/notes';
+import { confirmDelete } from './ConfirmDialog';
 
 /**
  * Write `value` through `save`, but not on every keystroke.
@@ -104,7 +105,23 @@ export default function NotesModule() {
     return next;
   });
 
-  const remove = (noteId) => setStored(prev => (Array.isArray(prev) ? prev : []).filter(n => String(n.id) !== String(noteId)));
+  // Resolves to whether it actually went, so the editor only leaves the
+  // screen when the note is really gone.
+  const remove = async (noteId) => {
+    const note = notes.find(n => String(n.id) === String(noteId));
+    const cat = note ? categoryMeta(note.category, categories) : null;
+    const ok = await confirmDelete({
+      title: '删掉这则笔记？',
+      subject: note ? {
+        label: noteTitle(note),
+        meta: [cat && `${cat.emoji} ${cat.label}`, note.updatedAt && `改于 ${describeDate(getTodayString(new Date(note.updatedAt)))}`]
+          .filter(Boolean).join(' · '),
+      } : null,
+      body: note && !note.archived ? '只是不想在列表里看到的话，用「归档」就好 — 随时找得回来。' : null,
+    });
+    if (ok) setStored(prev => (Array.isArray(prev) ? prev : []).filter(n => String(n.id) !== String(noteId)));
+    return ok;
+  };
 
   if (id) {
     return (
@@ -178,9 +195,17 @@ function NotesList({ notes, categories, customCategories, setCustomCategories, o
     setShowCategoryForm(false);
   };
 
-  const deleteCategory = (catId) => {
-    setCustomCategories(prev => (Array.isArray(prev) ? prev : []).filter(c => c.id !== catId));
-    if (activeCategory === catId) setActiveCategory(null);
+  const deleteCategory = async (c) => {
+    const inIt = notes.filter(n => n.category === c.id).length;
+    const ok = await confirmDelete({
+      title: '删掉这个分类？',
+      subject: { label: `${c.emoji} ${c.label}`, meta: inIt ? `里面有 ${inIt} 则笔记` : '里面没有笔记' },
+      body: inIt ? '笔记一则都不会删 — 它们会移到「杂项」。' : null,
+      irreversible: false,
+    });
+    if (!ok) return;
+    setCustomCategories(prev => (Array.isArray(prev) ? prev : []).filter(x => x.id !== c.id));
+    if (activeCategory === c.id) setActiveCategory(null);
   };
 
   return (
@@ -299,7 +324,7 @@ function NotesList({ notes, categories, customCategories, setCustomCategories, o
                 {customCategories.map(c => (
                   <button
                     key={c.id}
-                    onClick={() => deleteCategory(c.id)}
+                    onClick={() => deleteCategory(c)}
                     // Deleting a custom category never deletes its notes —
                     // they fall back to 杂项. Losing writing because you tidied
                     // up a label would be indefensible.
@@ -513,7 +538,19 @@ function NoteEditor({ noteId, notes, categories, onSave, onDelete, onBack }) {
     checklist: draft.checklist.map(i => (i.id === itemId ? { ...i, ...fields } : i)),
   });
   const addItem = () => patch({ checklist: [...draft.checklist, { id: newId(), text: '', done: false }] });
-  const removeItem = (itemId) => patch({ checklist: draft.checklist.filter(i => i.id !== itemId) });
+  // An empty row goes straight away — that is tidying, and asking would be
+  // noise. A row with words in it is asked about first, because the note
+  // autosaves: there is no 取消 to back out of a mis-tap here.
+  const removeItem = async (item) => {
+    if (item.text.trim()) {
+      const ok = await confirmDelete({
+        title: '删掉这一项？',
+        subject: { label: item.text, meta: item.done ? '已完成' : '还没做' },
+      });
+      if (!ok) return;
+    }
+    setDraft(prev => ({ ...prev, checklist: prev.checklist.filter(i => i.id !== item.id), updatedAt: Date.now() }));
+  };
 
   const cat = categoryMeta(draft.category, categories);
 
@@ -549,7 +586,7 @@ function NoteEditor({ noteId, notes, categories, onSave, onDelete, onBack }) {
             <Archive size={16} />
           </button>
           <button
-            onClick={() => { onDelete(draft.id); onBack(); }}
+            onClick={async () => { if (await onDelete(draft.id)) onBack(); }}
             title="删除"
             style={{ ...iconBtn, color: 'var(--color-accent-red)' }}
           >
@@ -624,7 +661,7 @@ function NoteEditor({ noteId, notes, categories, onSave, onDelete, onBack }) {
                   color: item.done ? 'var(--text-muted)' : 'var(--text-primary)',
                 }}
               />
-              <button onClick={() => removeItem(item.id)} style={{ ...iconBtn, color: 'var(--text-muted)' }}>
+              <button onClick={() => removeItem(item)} style={{ ...iconBtn, color: 'var(--text-muted)' }}>
                 <X size={14} />
               </button>
             </div>

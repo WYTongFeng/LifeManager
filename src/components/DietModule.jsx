@@ -12,6 +12,7 @@ import { estimateFoodFromText, sumItems, scaleItem } from '../utils/foodEstimate
 import { AI_FOOD_PROMPT, parsePastedFood } from '../utils/foodPaste';
 import { computeTdee } from '../utils/tdee';
 import { nowTimeStr } from '../utils/datetime';
+import { confirmDelete } from './ConfirmDialog';
 
 /** Guess the meal slot from the clock, so the user rarely has to change it. */
 function currentMealCategory(now = new Date()) {
@@ -351,8 +352,17 @@ export default function DietModule({
     setShowAddModal(true);
   };
 
-  const handleDeleteMeal = (id) => {
-    setMeals(meals.filter(m => m.id !== id));
+  const handleDeleteMeal = async (meal) => {
+    const ok = await confirmDelete({
+      title: '删掉这一餐？',
+      subject: {
+        label: meal.name || '（没有名字）',
+        meta: [meal.category, meal.time].filter(Boolean).join(' · '),
+        amount: `${num(meal.calories)} kcal`,
+      },
+      body: '今天吃了多少、还能吃多少会马上跟着改。',
+    });
+    if (ok) setMeals(prev => prev.filter(m => m.id !== meal.id));
   };
 
   const handleMacroTargetChange = (key, value) => {
@@ -944,7 +954,7 @@ export default function DietModule({
                   +{num(meal.calories)} <span style={{ fontSize: '0.68rem', fontWeight: '400' }}>kcal</span>
                 </span>
                 <button
-                  onClick={(e) => { e.stopPropagation(); handleDeleteMeal(meal.id); }}
+                  onClick={(e) => { e.stopPropagation(); handleDeleteMeal(meal); }}
                   style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
                 >
                   <Trash2 size={15} />

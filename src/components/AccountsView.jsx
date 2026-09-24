@@ -17,9 +17,10 @@ import { getCycle } from '../utils/cycle';
 import {
   INSTALMENT_FREQUENCIES, buildInstalments, rebuildSchedule, setInstalmentAmount,
   removeInstalment, scheduleSummary, addToDebt, ADD_MODES, repaymentOutlook,
-  isFixedDebt,
+  isFixedDebt, deleteDebt, detachDebtRepayments,
 } from '../utils/debts';
 import { cycleCost } from '../utils/recurring';
+import { confirmDelete } from './ConfirmDialog';
 
 // Deliberately empty. Real balances used to be hardcoded here, which meant
 // anyone who opened the deployed site's JS bundle could read them — the app is
@@ -55,7 +56,7 @@ const money = (n) => `RM ${num(n).toLocaleString('en-MY', { minimumFractionDigit
  * The old screen let you type RM 40.22 into a box that nothing else on earth
  * read, which is why spending never moved a balance.
  */
-export default function AccountsView({ expenses = [] }) {
+export default function AccountsView({ expenses = [], onSaveExpense }) {
   // Read live, written through saveJSON: `accounts` has more than one writer
   // now (this screen, and the notification card that binds a phone app to an
   // account), and two usePersistentState instances for one key drift apart
@@ -409,8 +410,48 @@ export default function AccountsView({ expenses = [] }) {
   // then 20.73 eighteen times — several overlapping purchases, not one plan.
   const editInstalment = (debtId, due, amount) =>
     setDebts(setInstalmentAmount(loadJSON('debts', []), debtId, due, amount));
-  const dropInstalment = (debtId, due) =>
-    setDebts(removeInstalment(loadJSON('debts', []), debtId, due));
+  // Asked first: the trash icon sits one thumb-width from the 已付 tick on the
+  // same row, and this one takes a whole instalment out of the plan.
+  const dropInstalment = async (debtId, inst) => {
+    const ok = await confirmDelete({
+      title: '删掉这一期？',
+      subject: { label: inst.due, meta: inst.paid ? '这期已经付了' : '还没付', amount: money(inst.amount) },
+      body: '整期从分期表拿掉，不是把金额改成 0 — 分期表会少一期，总共欠的也会跟着少。',
+    });
+    if (ok) setDebts(removeInstalment(loadJSON('debts', []), debtId, inst.due));
+  };
+
+  // 「那个欠款不可以 delete…我弄错了一些」 — there was simply no way to get
+  // rid of one. Repayments logged against it are unlinked FIRST (see
+  // detachDebtRepayments for why they can't just be left or deleted), in that
+  // order so a failure partway leaves the debt still there to count them.
+  const removeDebt = async (d) => {
+    const repayments = detachDebtRepayments(d.id, expenses);
+    const repaidSum = repayments.reduce((t, e) => t + Math.abs(num(e.amount)), 0);
+    const plan = scheduleSummary(d);
+    const ok = await confirmDelete({
+      title: '删掉这笔欠款？',
+      subject: {
+        label: d.creditor,
+        meta: plan
+          ? `分期 · 还有 ${plan.remainingCount} 期${plan.paidCount ? `，已付 ${plan.paidCount} 期` : ''}`
+          : '一次过 / 想还多少还多少',
+        amount: money(debtOutstanding(d, expenses)),
+      },
+      body: repayments.length > 0 ? (
+        <>
+          底下记了 <strong style={{ color: 'var(--text-primary)' }}>{repayments.length} 笔还款</strong>（共 {money(repaidSum)}）。
+          那些钱是真的从户口出去了，所以<strong style={{ color: 'var(--text-primary)' }}>不会跟着删掉</strong> —
+          它们会变回普通开销，算进那几天花的钱里。户口余额不会变。
+        </>
+      ) : '「总共欠」和这个月要还的都会少掉这笔。',
+    });
+    if (!ok) return;
+    for (const r of repayments) onSaveExpense?.(r);
+    setDebts(prev => deleteDebt(prev, d.id));
+    resetDebtForm();
+    setDebtModal(false);
+  };
 
   const toggleDebtInstalment = (debtId, due) =>
     setDebts(prev => toggleInstalmentPaid(prev, debtId, due));
@@ -851,7 +892,7 @@ export default function AccountsView({ expenses = [] }) {
 
           {debtList.length > 0 && (
             <p style={{ fontSize: '0.67rem', color: 'var(--text-muted)', marginTop: '10px', lineHeight: 1.5 }}>
-              这里只管「总共欠多少」和分期表 — <strong>点一行</strong>可以改内容或分期表。
+              这里只管「总共欠多少」和分期表 — <strong>点一行</strong>可以改内容、改分期表，或者删掉记错的。
               这个月要还多少、几时还，在「本月」那边填和记，一个地方就够了。
             </p>
           )}
@@ -1140,7 +1181,13 @@ export default function AccountsView({ expenses = [] }) {
 
       {/* Debt modal */}
       {debtModal && (
-        <Modal title={editingId ? '编辑欠款' : '新增欠款'} onClose={() => { setDebtModal(false); resetDebtForm(); }} onSubmit={submitDebt}>
+        <Modal
+          title={editingId ? '编辑欠款' : '新增欠款'}
+          onClose={() => { setDebtModal(false); resetDebtForm(); }}
+          onSubmit={submitDebt}
+          onDelete={editingDebt ? () => removeDebt(editingDebt) : null}
+          deleteLabel="删掉这笔欠款"
+        >
           <div>
             <label style={labelStyle}>欠谁 / 什么</label>
             <input type="text" autoFocus value={dCreditor} onChange={e => setDCreditor(e.target.value)}
@@ -1372,7 +1419,7 @@ export default function AccountsView({ expenses = [] }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => dropInstalment(editingDebt.id, i.due)}
+                      onClick={() => dropInstalment(editingDebt.id, i)}
                       aria-label={`删掉 ${i.due} 这一期`}
                       style={{
                         background: 'none', border: 'none', color: 'var(--text-muted)',
@@ -1413,7 +1460,7 @@ function MiniButton({ onClick, children }) {
   );
 }
 
-function Modal({ title, onClose, onSubmit, children }) {
+function Modal({ title, onClose, onSubmit, children, onDelete = null, deleteLabel = '删掉' }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -1429,8 +1476,30 @@ function Modal({ title, onClose, onSubmit, children }) {
             <button type="button" onClick={onClose} className="btn-secondary" style={{ flex: 1 }}>取消</button>
             <button type="submit" className="btn-primary" style={{ flex: 1 }}>保存</button>
           </div>
+          {onDelete && <DeleteRow onClick={onDelete}>{deleteLabel}</DeleteRow>}
         </form>
       </div>
+    </div>
+  );
+}
+
+// Below 保存, set apart by a rule, and never the same shape as the two buttons
+// above it — the thing that destroys should not look like the thing that saves.
+function DeleteRow({ onClick, children }) {
+  return (
+    <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.85rem' }}>
+      <button
+        type="button"
+        onClick={onClick}
+        style={{
+          width: '100%', padding: '0.55rem', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+          background: 'var(--color-accent-red-soft)', border: '1px dashed var(--color-accent-red)',
+          color: 'var(--color-accent-red)', fontSize: '0.76rem', fontWeight: '700',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+        }}
+      >
+        <Trash2 size={13} /> {children}
+      </button>
     </div>
   );
 }

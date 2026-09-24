@@ -41,6 +41,7 @@ import ShareTabSettle from './ShareTabSettle';
 import ShareTabBills from './ShareTabBills';
 import ShareTabSettings from './ShareTabSettings';
 import { OWNERSHIP } from '../utils/recordOwnership';
+import { confirmDelete } from './ConfirmDialog';
 
 const inputStyle = {
   width: '100%',
@@ -956,8 +957,30 @@ export default function MoneyModule({
   // onDeleteExpenses, not setExpenses: the day browser can be showing any day,
   // and `setExpenses` only ever rewrites today's partition — deleting a row
   // from last Tuesday through it would have done nothing at all.
-  const handleDeleteExpense = (id) => {
-    onDeleteExpenses([id]);
+  //
+  // Asked first. The trash icon sits a few pixels from the pencil on a row
+  // that opens when tapped, and 「我每次按错」 was the result.
+  const handleDeleteExpense = async (item) => {
+    const all = allExpenses ?? expenses;
+    const record = all.find(e => e.id === item.id) ?? item;
+    const incoming = num(record.amount) < 0;
+    const account = accountById(accounts, record.accountId)?.name ?? record.paymentMethod;
+    // A project's repayments point at it by id. Deleting it leaves them
+    // pointing at nothing, which is worth knowing before rather than after.
+    const linked = record.isProject ? all.filter(e => String(e.repaysExpenseId) === String(record.id)).length : 0;
+    const ok = await confirmDelete({
+      title: incoming ? '删掉这笔收到的钱？' : '删掉这笔记录？',
+      subject: {
+        label: record.merchant || '（没有名字）',
+        meta: [record.date && describeDate(record.date), record.time, account].filter(Boolean).join(' · '),
+        amount: `${incoming ? '+' : '-'} RM ${Math.abs(num(record.amount)).toFixed(2)}`,
+      },
+      body: linked > 0
+        ? `它底下还记着 ${linked} 笔别人还的钱。那几笔不会跟着删，但会找不到它们在还哪一笔。`
+        : record.accountId == null || !account ? null
+          : incoming ? `${account} 的余额会扣回这笔。` : `${account} 的余额会加回这笔，就像没记过一样。`,
+    });
+    if (ok) onDeleteExpenses([record.id]);
   };
 
   const openTransferModal = () => {
@@ -1011,10 +1034,20 @@ export default function MoneyModule({
   // Deleting one half of a pair would leave both balances wrong in opposite
   // directions — the worst possible state for a ledger, because each account
   // looks individually plausible. Both halves always go together.
-  const handleDeleteTransfer = (transferId) => {
-    onDeleteExpenses(
-      (allExpenses ?? []).filter(e => e.transferId === transferId).map(e => e.id)
-    );
+  const handleDeleteTransfer = async (transferId) => {
+    const pair = (allExpenses ?? []).filter(e => e.transferId === transferId);
+    const out = pair.find(e => num(e.amount) > 0) ?? pair[0];
+    const into = pair.find(e => e !== out);
+    const ok = await confirmDelete({
+      title: '删掉这笔转账？',
+      subject: {
+        label: `${accountById(accounts, out?.accountId)?.name ?? '?'} → ${accountById(accounts, into?.accountId)?.name ?? '?'}`,
+        meta: [out?.note, out?.time].filter(Boolean).join(' · ') || undefined,
+        amount: `RM ${Math.abs(num(out?.amount)).toFixed(2)}`,
+      },
+      body: '两边会一起删掉 — 转出的户口加回去，转入的户口扣回来。',
+    });
+    if (ok) onDeleteExpenses(pair.map(e => e.id));
   };
 
   // Log what the reader found. Values come from the (editable) result fields,
@@ -1110,7 +1143,7 @@ export default function MoneyModule({
         ))}
       </div>
 
-      {view === 'accounts' ? <AccountsView expenses={allExpenses ?? expenses} /> : view === 'cycle' ? (
+      {view === 'accounts' ? <AccountsView expenses={allExpenses ?? expenses} onSaveExpense={onSaveExpense} /> : view === 'cycle' ? (
         <CycleView
           expenses={allExpenses ?? expenses}
           // Approving an impulse request logs it as today's expense — using
@@ -2054,7 +2087,7 @@ export default function MoneyModule({
                   </span>
                   <Pencil size={13} color="var(--text-muted)" />
                   <button
-                    onClick={(e) => { e.stopPropagation(); handleDeleteExpense(item.id); }}
+                    onClick={(e) => { e.stopPropagation(); handleDeleteExpense(item); }}
                     aria-label={`Delete ${item.merchant}`}
                     style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
                   >
@@ -2110,7 +2143,7 @@ export default function MoneyModule({
                     </span>
                     <Pencil size={13} color="var(--text-muted)" />
                     <button
-                      onClick={(e) => { e.stopPropagation(); handleDeleteExpense(item.id); }}
+                      onClick={(e) => { e.stopPropagation(); handleDeleteExpense(item); }}
                       aria-label={`Delete ${item.merchant}`}
                       style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
                     >
@@ -2196,7 +2229,7 @@ export default function MoneyModule({
                   </span>
                   <Pencil size={13} color="var(--text-muted)" />
                   <button
-                    onClick={(e) => { e.stopPropagation(); handleDeleteExpense(item.id); }}
+                    onClick={(e) => { e.stopPropagation(); handleDeleteExpense(item); }}
                     aria-label={`Delete ${item.merchant}`}
                     style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
                   >

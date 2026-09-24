@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { Pencil, Trash2, Check, X } from '../utils/icons';
-import { saveJSON } from '../utils/storage';
+import { Pencil, Trash2, Check } from '../utils/icons';
+import { saveJSON, loadJSON } from '../utils/storage';
 import { num } from '../utils/num';
 import {
   renameTab, setTabArchived, tabRecordCount, deleteTab, detachTabRecords,
 } from '../utils/shareTabs';
+import { confirmAction, confirmDelete } from './ConfirmDialog';
 
 /**
  * 设置 for one 共摊本 — rename it, put it away, or get rid of it.
@@ -36,7 +37,6 @@ import {
  */
 export default function ShareTabSettings({ tab, shareTabs, expenses, onSaveExpense, onClose }) {
   const [name, setName] = useState(tab?.label ?? '');
-  const [confirming, setConfirming] = useState(null); // null | 'detach' | 'delete'
 
   if (!tab) return null;
 
@@ -59,14 +59,28 @@ export default function ShareTabSettings({ tab, shareTabs, expenses, onSaveExpen
   // this order deliberately: if a save fails partway the tab is still there,
   // still netting whatever is left, rather than gone with records pointing at
   // nothing.
-  const detachAll = () => {
+  const detachAll = async () => {
+    const ok = await confirmAction({
+      tone: 'warn',
+      title: `把 ${held} 笔放回普通开销？`,
+      subject: { label: tab.label, meta: `${held} 笔`, amount: `RM ${heldTotal.toFixed(2)}` },
+      body: '放回去之后它们会各自算数 — 付出去的算消费，收到的算收入，不再合成一个净额。',
+      confirmLabel: '放回去',
+    });
+    if (!ok) return;
     for (const record of detachTabRecords(tab.id, expenses)) onSaveExpense(record);
-    setConfirming(null);
   };
 
-  const remove = () => {
-    const { tabs, deleted } = deleteTab(shareTabs, tab.id, expenses);
-    if (!deleted) { setConfirming(null); return; }
+  const remove = async () => {
+    const ok = await confirmDelete({
+      title: '删掉这个共摊本？',
+      subject: { label: tab.label, meta: tab.bills?.length ? `连同 ${tab.bills.length} 个固定支出` : '里面没有记录了' },
+      body: '只想先收起来的话，用上面的「封存」就好 — 随时拿得回来。',
+    });
+    if (!ok) return;
+    // Re-read: the list can have changed while the dialog was open.
+    const { tabs, deleted } = deleteTab(loadJSON('shareTabs', shareTabs), tab.id, expenses);
+    if (!deleted) return;
     save(tabs);
     onClose?.();
   };
@@ -127,32 +141,13 @@ export default function ShareTabSettings({ tab, shareTabs, expenses, onSaveExpen
       {/* DELETE. Blocked while anything points at the tab, and it says what to
           do about it rather than just greying out. */}
       {held === 0 ? (
-        confirming === 'delete' ? (
-          <div style={{ display: 'flex', gap: '6px' }}>
-            <button type="button" onClick={() => setConfirming(null)} className="btn-secondary" style={{ flex: 1, padding: '7px', fontSize: '0.72rem' }}>
-              <X size={13} /> 算了
-            </button>
-            <button
-              type="button"
-              onClick={remove}
-              style={{
-                flex: 1, padding: '7px', fontSize: '0.72rem', fontWeight: '700', cursor: 'pointer',
-                borderRadius: 'var(--radius-sm)', background: 'var(--color-accent-red)',
-                border: 'none', color: 'white',
-              }}
-            >
-              真的删掉
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setConfirming('delete')}
-            style={{ ...rowBtn, color: 'var(--color-accent-red)' }}
-          >
-            <Trash2 size={13} /> 删掉这个共摊本
-          </button>
-        )
+        <button
+          type="button"
+          onClick={remove}
+          style={{ ...rowBtn, color: 'var(--color-accent-red)', borderStyle: 'dashed', borderColor: 'var(--color-accent-red)' }}
+        >
+          <Trash2 size={13} /> 删掉这个共摊本
+        </button>
       ) : (
         <div>
           <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', margin: '0 0 6px', lineHeight: 1.5 }}>
@@ -160,33 +155,9 @@ export default function ShareTabSettings({ tab, shareTabs, expenses, onSaveExpen
             删了的话这些钱会卡在一个不存在的本子底下，哪个总数都算不到它。
             想清空的话，先把它们放回普通开销。
           </p>
-          {confirming === 'detach' ? (
-            <div style={{ display: 'flex', gap: '6px' }}>
-              <button type="button" onClick={() => setConfirming(null)} className="btn-secondary" style={{ flex: 1, padding: '7px', fontSize: '0.72rem' }}>
-                <X size={13} /> 算了
-              </button>
-              <button
-                type="button"
-                onClick={detachAll}
-                style={{
-                  flex: 1, padding: '7px', fontSize: '0.72rem', fontWeight: '700', cursor: 'pointer',
-                  borderRadius: 'var(--radius-sm)', background: 'var(--color-accent-amber)',
-                  border: 'none', color: '#1a1a1a',
-                }}
-              >
-                放回去（{held} 笔）
-              </button>
-            </div>
-          ) : (
-            <button type="button" onClick={() => setConfirming('detach')} style={rowBtn}>
-              把这 {held} 笔放回普通开销
-            </button>
-          )}
-          {confirming === 'detach' && (
-            <p style={{ fontSize: '0.63rem', color: 'var(--color-accent-amber)', margin: '6px 0 0', lineHeight: 1.5 }}>
-              放回去之后它们会各自算数 — 付出去的算消费，收到的算收入，不再合成一个净额。
-            </p>
-          )}
+          <button type="button" onClick={detachAll} style={rowBtn}>
+            把这 {held} 笔放回普通开销
+          </button>
         </div>
       )}
     </div>

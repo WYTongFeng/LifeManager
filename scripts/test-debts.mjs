@@ -19,7 +19,7 @@ import {
   buildSchedule, buildInstalments, rebuildSchedule, setInstalmentAmount,
   removeInstalment, scheduleSummary, commitmentOf, scheduledForCycle, hasCyclePlan,
   isDebtSkippedInCycle, setDebtCycleSkip, instalmentDueInCycle, dueInCycle, addToDebt,
-  repaymentOutlook,
+  repaymentOutlook, deleteDebt, detachDebtRepayments,
 } from '../src/utils/debts.js';
 import { getCycle, computeCycleBudget, grossSpentByDayIndex } from '../src/utils/cycle.js';
 import { debtOutstanding, computeNetPosition } from '../src/utils/networth.js';
@@ -448,6 +448,35 @@ check('the months ahead show it under October, and only October',
 near('...for the full outstanding', withOct[2].total, 800);
 check('...while the dateless flat debt still claims no future month',
   withOct.every(m => m.rows.every(r => r.creditor !== '阿明')), true);
+
+// --- deleting a debt ---
+// 「那个欠款不可以 delete…我弄错了一些」. Gone from the list, and nothing that
+// was logged against it is left pointing at a debt that no longer exists.
+{
+  const list = [{ id: 1, creditor: '错的', amount: 100 }, { id: '2', creditor: '对的', amount: 50 }];
+  check('deleting a debt removes only that debt', deleteDebt(list, 1).map(d => d.creditor), ['对的']);
+  check('...matching ids across number/string, like every other debt helper',
+    deleteDebt(list, 2).map(d => d.creditor), ['错的']);
+  check('...and an unknown id changes nothing', deleteDebt(list, 99).length, 2);
+
+  const ledger = [
+    { id: 'a', amount: 30, repaysDebtId: 1, type: 'repayment', category: '还款', accountId: 'bank' },
+    { id: 'b', amount: 20, repaysDebtId: '1', category: 'food' },
+    { id: 'c', amount: 40, repaysDebtId: 2, type: 'repayment' },
+    { id: 'd', amount: 15, category: 'food' },
+  ];
+  const detached = detachDebtRepayments(1, ledger);
+  check("only that debt's repayments come back, and only them", detached.map(e => e.id), ['a', 'b']);
+  check('...each with the link gone', detached.map(e => e.repaysDebtId), [null, null]);
+  check('...and no longer calling itself a repayment', detached.map(e => e.type), ['expense', 'expense']);
+  check('...with the amount, account and category untouched — the money really left',
+    [detached[0].amount, detached[0].accountId, detached[0].category], [30, 'bank', '还款']);
+  check('...and none of them counted as a repayment any more', detached.some(isRepayment), false);
+  check('a debt with nothing logged against it has nothing to detach', detachDebtRepayments(3, ledger), []);
+  check('a repayment that is also a bill payment stays a bill',
+    detachDebtRepayments(5, [{ id: 'e', amount: 9, repaysDebtId: 5, allocationId: 'rent', type: 'repayment' }])[0].type,
+    'bill');
+}
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : fail + ' FAILED'}  (${pass} passed)`);
 if (fail > 0) process.exit(1);

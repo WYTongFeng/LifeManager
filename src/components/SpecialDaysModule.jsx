@@ -12,6 +12,7 @@ import {
   normalizeSpecialDays, normalizeSpecialDay, nextDate, daysUntil,
   describeCountdown, describeMonthDay, occurrenceNumber, sortUpcoming,
 } from '../utils/specialDays';
+import { confirmDelete } from './ConfirmDialog';
 
 const card = {
   background: 'var(--bg-card)',
@@ -58,7 +59,17 @@ export default function SpecialDaysModule() {
     return next;
   });
 
-  const remove = (did) => setStored(prev => (Array.isArray(prev) ? prev : []).filter(d => String(d.id) !== String(did)));
+  const remove = async (did) => {
+    const d = days.find(x => String(x.id) === String(did));
+    const ok = await confirmDelete({
+      title: '删掉这个日子？',
+      subject: d ? {
+        label: `${d.emoji} ${d.title || '（没有名字）'}`,
+        meta: [d.date && describeMonthDay(d), d.yearly ? '每年' : '只有一次'].filter(Boolean).join(' · '),
+      } : null,
+    });
+    if (ok) setStored(prev => (Array.isArray(prev) ? prev : []).filter(x => String(x.id) !== String(did)));
+  };
 
   if (id) {
     return (

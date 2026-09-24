@@ -40,6 +40,7 @@ const WeightTrendChart = lazy(() => import('./WeightTrendChart'));
 // is in the main chunk regardless and a dynamic import here only makes the
 // bundler warn that the split is ineffective.
 import TextExportModal from './TextExportModal';
+import { confirmDelete } from './ConfirmDialog';
 
 // The routines themselves now live in utils/workoutRoutines.js — the real
 // 4-day split the user actually trains, in a gym version and a no-equipment
@@ -338,8 +339,18 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
   const activeSection = section;
   const inSession = section === 'strength' && sub === 'session';
 
-  const handleDeleteWorkout = (id) => {
-    setWorkouts(workouts.filter(w => w.id !== id));
+  const handleDeleteWorkout = async (log) => {
+    const isSession = log.type === 'session';
+    const ok = await confirmDelete({
+      title: '删掉这条训练记录？',
+      subject: {
+        label: isSession ? log.routineName : (log.activity || log.exercise || '这一组'),
+        meta: [isSession ? `整场 · ${log.durationMin} 分钟` : log.routineName, log.time].filter(Boolean).join(' · '),
+        amount: log.calories != null ? `~${log.calories} kcal` : undefined,
+      },
+      body: log.isNewPR ? '这一组是新纪录 — 删掉之后纪录会退回上一次的。' : null,
+    });
+    if (ok) setWorkouts(prev => prev.filter(w => w.id !== log.id));
   };
 
   const handleAddRoutine = (e) => {
@@ -371,11 +382,19 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
     setShowAddRoutineModal(false);
   };
 
-  const handleDeleteRoutine = (id) => {
-    const remaining = routinesRaw.filter(r => r.id !== id);
-    if (remaining.length === 0) return; // always keep at least one routine
-    setRoutines(remaining);
-    if (chosenRoutineId === id) setChosenRoutineId(null);
+  const handleDeleteRoutine = async (routine) => {
+    if (routinesRaw.length <= 1) return; // always keep at least one routine
+    const ok = await confirmDelete({
+      title: '删掉这个菜单？',
+      subject: { label: routine.name, meta: routine.exercises.map(e => e.name).join(' · ') },
+      body: '以前练过的记录都会留着，只是以后不能再选这个菜单。',
+    });
+    if (!ok) return;
+    setRoutines(prev => {
+      const remaining = prev.filter(r => r.id !== routine.id);
+      return remaining.length === 0 ? prev : remaining;
+    });
+    if (chosenRoutineId === routine.id) setChosenRoutineId(null);
   };
 
   // Up/down buttons rather than a drag library — the user's own call (no new
@@ -428,11 +447,22 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
       : r)));
   };
 
-  const deleteExercise = (idx) => {
+  const deleteExercise = async (idx) => {
     if (!activeRoutine) return;
-    const exercises = activeRoutine.exercises.filter((_, i) => i !== idx);
-    if (exercises.length === 0) return; // a routine always keeps at least one exercise
-    setRoutines(routinesRaw.map(r => (r.id === activeRoutine.id ? { ...r, exercises } : r)));
+    if (activeRoutine.exercises.length <= 1) return; // a routine always keeps at least one exercise
+    const exo = activeRoutine.exercises[idx];
+    const routineId = activeRoutine.id;
+    const ok = await confirmDelete({
+      title: '从菜单里拿掉这个动作？',
+      subject: { label: exo?.name || '这个动作', meta: `${activeRoutine.name} · ${exo?.targetSets ?? '?'} 组` },
+      body: '以前练过的记录不会动。',
+    });
+    if (!ok) return;
+    setRoutines(prev => prev.map(r => {
+      if (r.id !== routineId) return r;
+      const exercises = r.exercises.filter((_, i) => i !== idx);
+      return exercises.length === 0 ? r : { ...r, exercises };
+    }));
     setPinnedIndex(null);
   };
 
@@ -765,7 +795,7 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
           </span>
           {!readOnly && (
             <button
-              onClick={() => handleDeleteWorkout(log.id)}
+              onClick={() => handleDeleteWorkout(log)}
               style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
             >
               <Trash2 size={15} />
@@ -1774,7 +1804,7 @@ export default function SportsModule({ workouts, setWorkouts, timer, history = [
                       </div>
                     </div>
                     <button
-                      onClick={(e) => { e.stopPropagation(); handleDeleteRoutine(r.id); }}
+                      onClick={(e) => { e.stopPropagation(); handleDeleteRoutine(r); }}
                       aria-label={`删除 ${r.name}`}
                       style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', flexShrink: 0 }}
                     >

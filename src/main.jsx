@@ -4,6 +4,7 @@ import { HashRouter } from 'react-router-dom'
 import './index.css'
 import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
+import { ConfirmHost } from './components/ConfirmDialog.jsx'
 import { init as initCloudSync } from './utils/cloudSync'
 
 // HashRouter, not BrowserRouter — the Capacitor WebView serves dist/ through
@@ -15,6 +16,8 @@ createRoot(document.getElementById('root')).render(
     <ErrorBoundary>
       <HashRouter>
         <App />
+        {/* Every 「删掉？」 in the app renders here — see ConfirmDialog.jsx. */}
+        <ConfirmHost />
       </HashRouter>
     </ErrorBoundary>
   </StrictMode>,

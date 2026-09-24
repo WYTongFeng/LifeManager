@@ -15,6 +15,7 @@ import {
 import {
   notificationsSupported, checkPermission, requestPermission, pendingCount, explainReason,
 } from '../utils/notify';
+import { confirmDelete } from './ConfirmDialog';
 
 const card = {
   background: 'var(--bg-card)',
@@ -61,7 +62,17 @@ export default function RemindersModule() {
     return next;
   });
 
-  const remove = (rid) => setStored(prev => (Array.isArray(prev) ? prev : []).filter(r => String(r.id) !== String(rid)));
+  const remove = async (rid) => {
+    const r = reminders.find(x => String(x.id) === String(rid));
+    const ok = await confirmDelete({
+      title: '删掉这个提醒？',
+      subject: r ? { label: r.title || '（没有标题）', meta: describeRepeat(r) } : null,
+      // Switching off is the non-destructive version, and it is one tap on
+      // the same row — say so, since that is usually what was meant.
+      body: r && r.enabled && r.repeat !== 'once' ? '只是暂时不想被提醒的话，关掉开关就好，内容都会留着。' : null,
+    });
+    if (ok) setStored(prev => (Array.isArray(prev) ? prev : []).filter(x => String(x.id) !== String(rid)));
+  };
 
   if (id) {
     return (

@@ -7,6 +7,7 @@ import {
 import { useLiveJSON, useToday, saveJSON, loadJSON } from '../utils/storage';
 import { num, newId } from '../utils/num';
 import { describeDate } from '../utils/datetime';
+import { confirmDelete } from './ConfirmDialog';
 import {
   getCycle, computeCycleBudget, isInCycle, getPreviousCycle, grossSpentByDayIndex, hasCycleEnded,
 } from '../utils/cycle';
@@ -918,7 +919,16 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                 setEditingId(s.id); setFLabel(s.label);
                 setFAmount(String(s.amount)); setFKind(s.kind); setIncomeModal(true);
               }}
-              onDelete={() => setIncomeSources(incomeSources.filter(x => x.id !== row.id))}
+              onDelete={async () => {
+                const ok = await confirmDelete({
+                  title: '删掉这个收入来源？',
+                  subject: { label: row.label, meta: pass ? '代收代付' : '可以花的收入', amount: money(s.amount ?? row.expected) },
+                  body: row.landed
+                    ? `这个月已经收到的 ${money(row.arrived)} 不会被删 — 记账里的那几笔还在，只是不再归到这里。`
+                    : '以后每个月的收入就不会再算它。记账里的记录一笔都不会动。',
+                });
+                if (ok) setIncomeSources(loadJSON('incomeSources', incomeSources).filter(x => x.id !== row.id));
+              }}
             />
           );
         })}
@@ -1180,7 +1190,19 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
                 setFEssential(a.essential !== false);
                 setAllocModal(true);
               }}
-              onDelete={() => setAllocations(allocations.filter(x => x.id !== a.id))}
+              onDelete={async () => {
+                const ok = await confirmDelete({
+                  title: '删掉这个固定开销？',
+                  subject: { label: a.label, meta: when, amount: money(a.charged > 0 ? a.charged : a.budgeted) },
+                  body: (
+                    <>
+                      以后每个月都不会再预留这笔，已经付掉的记录不会动。
+                      {!a.skipped && <><br />只是<strong style={{ color: 'var(--text-primary)' }}>这个月不用付</strong>的话，按左边的勾就好，不用删。</>}
+                    </>
+                  ),
+                });
+                if (ok) setAllocations(loadJSON('allocations', allocations).filter(x => x.id !== a.id));
+              }}
             />
           );
         })}

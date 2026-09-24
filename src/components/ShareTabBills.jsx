@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Plus, Pencil, Trash2, Check } from '../utils/icons';
-import { saveJSON } from '../utils/storage';
+import { saveJSON, loadJSON } from '../utils/storage';
 import { num, newId } from '../utils/num';
 import { addTabBill, updateTabBill, removeTabBill, billsStatus } from '../utils/shareTabs';
+import { confirmDelete } from './ConfirmDialog';
 
 const money = (n) => `RM ${num(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -57,9 +58,16 @@ export default function ShareTabBills({ tab, shareTabs, expenses, cycle, onLogBi
     resetForm();
   };
 
-  const remove = (billId) => {
-    saveJSON('shareTabs', removeTabBill(shareTabs, tab.id, billId));
-    if (editingId === billId) resetForm();
+  const remove = async (bill) => {
+    const ok = await confirmDelete({
+      title: '删掉这个固定支出？',
+      subject: { label: bill.label, meta: `${tab.label} · 每月 ${bill.dueDay ?? 1} 号`, amount: money(bill.amount) },
+      body: '以后不会再提醒这笔。已经记下的付款一笔都不会动。',
+    });
+    if (!ok) return;
+    // Re-read: the list can have changed while the dialog was open.
+    saveJSON('shareTabs', removeTabBill(loadJSON('shareTabs', shareTabs), tab.id, bill.id));
+    if (editingId === bill.id) resetForm();
   };
 
   const showForm = adding || editingId != null;
@@ -112,7 +120,7 @@ export default function ShareTabBills({ tab, shareTabs, expenses, cycle, onLogBi
               <button onClick={() => startEdit(bill)} aria-label={`编辑 ${bill.label}`} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px' }}>
                 <Pencil size={13} />
               </button>
-              <button onClick={() => remove(bill.id)} aria-label={`删除 ${bill.label}`} style={{ background: 'none', border: 'none', color: 'var(--color-accent-red)', cursor: 'pointer', padding: '2px' }}>
+              <button onClick={() => remove(bill)} aria-label={`删除 ${bill.label}`} style={{ background: 'none', border: 'none', color: 'var(--color-accent-red)', cursor: 'pointer', padding: '2px' }}>
                 <Trash2 size={13} />
               </button>
             </div>

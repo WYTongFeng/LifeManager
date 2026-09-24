@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { Plus, Trash2, X, Pencil, Check, Square, CheckSquare } from '../utils/icons';
-import { useLiveJSON, saveJSON } from '../utils/storage';
+import { useLiveJSON, saveJSON, loadJSON } from '../utils/storage';
 import {
   CATEGORY_PREFS_KEY, BUILTIN_EXPENSE_CATEGORIES, BUILTIN_INCOME_CATEGORIES,
   resolveMoneyCategories, newCategoryId, emptyCategoryPrefs,
 } from '../utils/moneyCategories';
+import { confirmDelete } from './ConfirmDialog';
 
 const inputStyle = {
   width: '100%', padding: '9px 11px', borderRadius: 'var(--radius-sm)',
@@ -75,11 +76,20 @@ export default function CategoryManager({ onClose }) {
     setEditing(null);
   };
 
-  const deleteCustom = (id) => {
+  const deleteCustom = async (c) => {
+    const ok = await confirmDelete({
+      title: '删掉这个分类？',
+      subject: { label: `${c.emoji} ${renamedLabel(c)}`, meta: '自己加的分类' },
+      // Records keep the id, and moneyCategoryMeta still renders a missing
+      // one — so this is true, not a comfort line.
+      body: '以前记在这个分类的开销不会被删，只是它不会再出现在选单里。只想先不用的话，按旁边的勾隐藏就好。',
+    });
+    if (!ok) return;
+    const live = { ...emptyCategoryPrefs(), ...(loadJSON(CATEGORY_PREFS_KEY, null) ?? {}) };
     save({
-      ...prefs,
-      custom: (prefs.custom ?? []).filter(c => c.id !== id),
-      hidden: (prefs.hidden ?? []).filter(h => h !== id),
+      ...live,
+      custom: (live.custom ?? []).filter(x => x.id !== c.id),
+      hidden: (live.hidden ?? []).filter(h => h !== c.id),
     });
   };
 
@@ -148,7 +158,7 @@ export default function CategoryManager({ onClose }) {
             </button>
             {isCustom && (
               <button
-                onClick={() => deleteCustom(c.id)}
+                onClick={() => deleteCustom(c)}
                 aria-label={`删除 ${renamedLabel(c)}`}
                 style={{ background: 'none', border: 'none', color: 'var(--color-accent-red)', cursor: 'pointer', padding: '2px' }}
               >

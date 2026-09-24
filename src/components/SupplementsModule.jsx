@@ -15,6 +15,7 @@ import {
   hasMealValue, asMealRecord,
 } from '../utils/supplements';
 import { seedSupplements, OPTIONAL_TEMPLATES } from '../utils/supplementSeeds';
+import { confirmDelete } from './ConfirmDialog';
 import { notificationsSupported } from '../utils/notify';
 
 const card = {
@@ -145,7 +146,17 @@ export default function SupplementsModule({ onLogMeal }) {
         supplementId={id}
         supplements={supplements}
         onSave={(s) => { save(s); navigate('/diet/supplements'); }}
-        onDelete={() => { remove(id); navigate('/diet/supplements'); }}
+        onDelete={async () => {
+          const s = supplements.find(x => String(x.id) === String(id));
+          const ok = await confirmDelete({
+            title: '删掉这个补充品？',
+            subject: s ? { label: s.name || '（没有名字）', meta: s.brand || undefined } : null,
+            body: '以前吃过的记录会留着 — 删掉瓶子不会改写你吃过它这件事。',
+          });
+          if (!ok) return;
+          remove(id);
+          navigate('/diet/supplements');
+        }}
         onCancel={() => navigate('/diet/supplements')}
       />
     );

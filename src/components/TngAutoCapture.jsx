@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Radio, ShieldAlert, Check, HelpCircle, Trash2, Plus, X, Smartphone, RefreshCw, AlertTriangle,
 } from '../utils/icons';
-import { useLiveJSON, saveJSON } from '../utils/storage';
+import { useLiveJSON, saveJSON, loadJSON } from '../utils/storage';
 import { num } from '../utils/num';
 import {
   isNativeAvailable, isStaleApk, getStatus, openPermissionSettings,
@@ -13,6 +13,7 @@ import { CategorySelect } from './CategoryPicker';
 import { defaultAccount, accountById, sameId, typeMeta } from '../utils/accounts';
 import { dateStamp } from '../hooks/useTngCapture';
 import { AccountSelect } from './AccountPicker';
+import { confirmAction, confirmDelete } from './ConfirmDialog';
 
 const inputStyle = {
   width: '100%', padding: '8px 10px', borderRadius: 'var(--radius-sm)',
@@ -352,7 +353,20 @@ export default function TngAutoCapture({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
             <span style={{ fontSize: '0.78rem', fontWeight: '700' }}>侦测记录</span>
             {captureLog.length > 0 && (
-              <button onClick={() => saveJSON('tngCaptureLog', [])} className="btn-secondary" style={{ padding: '3px 8px', fontSize: '0.62rem' }}>
+              <button
+                onClick={async () => {
+                  const ok = await confirmDelete({
+                    title: '清空侦测记录？',
+                    subject: { label: '侦测记录', meta: `${captureLog.length} 则通知的判断结果` },
+                    body: '只是清掉这个除错用的列表 — 已经记进记账的开销一笔都不会动。',
+                    confirmLabel: '清空',
+                    irreversible: false,
+                  });
+                  if (ok) saveJSON('tngCaptureLog', []);
+                }}
+                className="btn-secondary"
+                style={{ padding: '3px 8px', fontSize: '0.62rem' }}
+              >
                 清空
               </button>
             )}
@@ -516,7 +530,21 @@ export default function TngAutoCapture({
                     }}>
                       {item.isMoneyIn ? '+' : ''}RM {Math.abs(num(item.amount)).toFixed(2)}
                     </span>
-                    <button onClick={() => setQueue(queue.filter(q => q.id !== item.id))}
+                    <button
+                      onClick={async () => {
+                        const ok = await confirmAction({
+                          tone: 'warn',
+                          title: item.isMoneyIn ? '忽略这笔进账？' : '忽略这笔付款？',
+                          subject: {
+                            label: item.merchant || (item.isMoneyIn ? '有钱进来' : '未知'),
+                            meta: [item.time, acc?.name].filter(Boolean).join(' · '),
+                            amount: `${item.isMoneyIn ? '+' : ''}RM ${Math.abs(num(item.amount)).toFixed(2)}`,
+                          },
+                          body: '忽略 = 不记进记账。如果这是一笔真的钱，之后就要自己手动补记。',
+                          confirmLabel: '忽略',
+                        });
+                        if (ok) setQueue(loadJSON('tngReviewQueue', []).filter(q => q.id !== item.id));
+                      }}
                       aria-label="忽略" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}>
                       <Trash2 size={15} />
                     </button>

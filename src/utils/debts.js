@@ -50,6 +50,7 @@
 import { num, sumBy, newId } from './num.js';
 import { isInCycle } from './cycle.js';
 import { nowTimeStr } from './datetime.js';
+import { txType } from './accounts.js';
 
 /** Category shown on a repayment. Not selectable as a plain expense category. */
 export const REPAYMENT_CATEGORY = '还款';
@@ -707,6 +708,40 @@ export function removeInstalment(debts, debtId, due) {
   return debts.map(d => {
     if (String(d.id) !== String(debtId) || !Array.isArray(d.schedule)) return d;
     return { ...d, schedule: d.schedule.filter(i => i.due !== due) };
+  });
+}
+
+/**
+ * Remove a debt outright. 「那个欠款不可以 delete…我弄错了一些」 (2026-09-25):
+ * a debt typed in wrong could be edited but never got rid of.
+ *
+ * Deleting the debt alone is only half of it — see `detachDebtRepayments`.
+ */
+export function deleteDebt(debts = [], debtId) {
+  return debts.filter(d => String(d.id) !== String(debtId));
+}
+
+/**
+ * Every repayment logged against this debt, with the link removed. Returns the
+ * CHANGED records only, for the caller to save one at a time through the real
+ * save path (the today-slice setter silently no-ops on older records).
+ *
+ * WHY THEY ARE UNLINKED, NOT LEFT ALONE OR DELETED
+ * A repayment is kept out of daily spending because its money was reserved up
+ * front against the debt. Delete the debt and that reserve is gone — a record
+ * still carrying `repaysDebtId` would then be counted by nothing at all: not
+ * spend, not a repayment, not a bill. Deleting the records instead would undo
+ * money that really did leave an account. So they go back to being what they
+ * physically were: money spent.
+ *
+ * A stored `type: 'repayment'` is re-derived rather than left behind, or the
+ * record would keep classifying itself as a repayment with no debt to repay.
+ */
+export function detachDebtRepayments(debtId, expenses = []) {
+  return repaymentsFor({ id: debtId }, expenses).map(e => {
+    const { type, ...rest } = e;
+    const untagged = { ...rest, repaysDebtId: null };
+    return { ...untagged, type: type == null || type === 'repayment' ? txType(untagged) : type };
   });
 }
 

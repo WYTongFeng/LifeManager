@@ -652,6 +652,220 @@ button:not(:disabled):active {
   to { opacity: 1; }
 }
 
+/* Confirm dialog — see ConfirmDialog.jsx.
+   Centred rather than a bottom sheet on purpose: the button that deletes must
+   never sit where the trash icon that opened it was, or a double tap goes
+   straight through. Above every other layer (.modal-overlay is 200, the
+   category manager 300) because it is usually asked from inside one. */
+.confirm-overlay {
+  --tone: var(--color-accent-red);
+  --tone-soft: var(--color-accent-red-soft);
+  --tone-line: rgba(240, 85, 75, 0.45);
+  --tone-halo: rgba(240, 85, 75, 0.08);
+  --tone-glow: rgba(240, 85, 75, 0.4);
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: fadeIn 0.14s ease;
+}
+
+.confirm-overlay.leaving {
+  animation: confirmFadeOut 0.16s ease forwards;
+  pointer-events: none;
+}
+
+.confirm-card {
+  width: 100%;
+  max-width: 340px;
+  padding: 1.35rem 1.15rem 1.05rem;
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(120% 70% at 50% 0%, var(--tone-soft) 0%, transparent 62%),
+    rgba(20, 20, 28, 0.98);
+  border: 1px solid var(--tone-line);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  text-align: center;
+  animation: confirmPop 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.confirm-overlay.leaving .confirm-card {
+  animation: confirmSink 0.16s ease forwards;
+}
+
+.confirm-card.tone-warn {
+  --tone: var(--color-accent-amber);
+  --tone-soft: var(--color-accent-amber-soft);
+  --tone-line: rgba(245, 165, 36, 0.45);
+  --tone-halo: rgba(245, 165, 36, 0.08);
+  --tone-glow: rgba(245, 165, 36, 0.4);
+}
+
+.confirm-icon {
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 0.8rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--tone);
+  background: var(--tone-soft);
+  border: 1px solid var(--tone-line);
+  box-shadow: 0 0 0 6px var(--tone-halo);
+  animation: confirmWobble 0.5s ease 0.12s both;
+}
+
+.confirm-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.confirm-subject {
+  margin-top: 0.85rem;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  border: 1px solid var(--border-glass);
+  border-left: 3px solid var(--tone);
+}
+
+.confirm-subject-label {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.confirm-subject-meta {
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  line-height: 1.45;
+}
+
+.confirm-subject-amount {
+  flex-shrink: 0;
+  font-size: 0.9rem;
+  font-weight: 800;
+  color: var(--tone);
+}
+
+.confirm-body {
+  margin-top: 0.75rem;
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.confirm-warning {
+  margin-top: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.64rem;
+  font-weight: 700;
+  color: var(--tone);
+  opacity: 0.85;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 1.05rem;
+}
+
+.confirm-actions > button {
+  flex: 1;
+  min-height: 42px;
+}
+
+/* The confirm button arms after a beat. The fill sweeping across it IS that
+   beat — tap before it finishes and nothing happens. */
+.confirm-go {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--tone);
+  background: var(--tone-soft);
+  color: var(--text-primary);
+  font-family: var(--font-main);
+  font-size: 0.84rem;
+  font-weight: 800;
+  cursor: not-allowed;
+}
+
+.confirm-go-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--tone);
+  transform-origin: left center;
+  transform: scaleX(0);
+  animation-name: confirmArm;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.confirm-go-label {
+  position: relative;
+}
+
+.confirm-go.armed {
+  cursor: pointer;
+  box-shadow: 0 4px 16px var(--tone-glow);
+}
+
+.tone-warn .confirm-go.armed .confirm-go-label {
+  color: #1a1a1a;
+}
+
+.confirm-go.armed:active {
+  transform: translateY(1px);
+}
+
+@keyframes confirmPop {
+  from { opacity: 0; transform: translateY(10px) scale(0.94); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes confirmSink {
+  to { opacity: 0; transform: translateY(6px) scale(0.97); }
+}
+
+@keyframes confirmFadeOut {
+  to { opacity: 0; }
+}
+
+@keyframes confirmArm {
+  to { transform: scaleX(1); }
+}
+
+@keyframes confirmWobble {
+  0% { transform: rotate(0); }
+  25% { transform: rotate(-9deg); }
+  50% { transform: rotate(7deg); }
+  75% { transform: rotate(-3deg); }
+  100% { transform: rotate(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .confirm-card, .confirm-icon, .confirm-overlay { animation: none; }
+}
+
 /* Tab Page Entrance Animation
 
    `backwards`, NOT `forwards`, and no resting `will-change` — both of those
