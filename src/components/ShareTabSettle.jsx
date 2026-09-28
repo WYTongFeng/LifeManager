@@ -8,6 +8,43 @@ const money = (n) => `RM ${num(n).toLocaleString('en-MY', { minimumFractionDigit
 const monthLabel = (cycleStart) => `${Number(cycleStart.slice(5, 7))} 月`;
 
 /**
+ * The month as it happened against the month as planned — the half of
+ * 「月初先预留，月底按实际结算」 that only exists once the month is over.
+ *
+ * 本月 reserved the expected share on the 1st; this is where the gap between
+ * that and reality finally shows, with names on it, so "−RM683.45" arrives
+ * already explained as "朋友2 还没给". Silent for a tab with no members (no
+ * plan to compare against) and for a month that went exactly to plan.
+ */
+function SettleVersusPlan({ c }) {
+  if (c.expectedNet == null) return null;
+  const gap = c.net - c.expectedNet;
+  if (Math.abs(gap) <= 0.005) {
+    return (
+      <div style={{ fontSize: '0.7rem', color: 'var(--color-money)', marginTop: '4px' }}>
+        跟月初预留的一样 — 大家都给齐了。
+      </div>
+    );
+  }
+  const short = (c.members ?? []).filter(m => m.state === 'unpaid' || m.state === 'partial');
+  return (
+    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: 1.55 }}>
+      月初预留的是 {c.expectedNet < 0 ? '−' : '+'}{money(Math.abs(c.expectedNet))}，
+      {gap < 0
+        ? <strong style={{ color: 'var(--color-accent-red)' }}>实际多出了 {money(-gap)}</strong>
+        : <strong style={{ color: 'var(--color-money)' }}>实际少了 {money(gap)}</strong>}
+      {short.length > 0 && (
+        <>
+          <br />
+          还没给齐：{short.map(m => `${m.name} ${money(m.short)}`).join('、')}。
+          他们之后补的话，记的时候在「这笔算哪个月的」选 {monthLabel(c.cycleStart)}，{monthLabel(c.cycleStart)}就会补平。
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
  * 结算 — acknowledging a share tab's cycle once it's actually over.
  *
  * NOTHING here decides whether a net counts — computeCycleBudget (cycle.js)
@@ -67,6 +104,7 @@ export default function ShareTabSettle({ shareTabs, expenses, cycle }) {
             净额 {c.isIncome ? '+' : '−'}{money(Math.abs(c.net))} → 算成{monthLabel(c.cycleStart)}的
             {c.isIncome ? '收入' : '支出'}
           </div>
+          <SettleVersusPlan c={c} />
           <button
             onClick={() => settle(tab.id, c.cycleStart, true)}
             style={{

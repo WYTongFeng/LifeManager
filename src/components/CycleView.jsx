@@ -9,7 +9,7 @@ import { num, newId } from '../utils/num';
 import { describeDate } from '../utils/datetime';
 import { confirmDelete } from './ConfirmDialog';
 import {
-  getCycle, computeCycleBudget, isInCycle, getPreviousCycle, grossSpentByDayIndex, hasCycleEnded,
+  getCycle, computeCycleBudget, isInCycle, getPreviousCycle, grossSpentByDayIndex,
 } from '../utils/cycle';
 import {
   FREQUENCIES, frequencyMeta, normalizeAllocation, cycleCost, isEstimated,
@@ -229,8 +229,11 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
     () => budgetLinesForCycle(shareTabs, expenses, cycle),
     [shareTabs, expenses, cycle]
   );
+  // A tab with members is on the budget from the 1st, before anything is
+  // logged in it — so it has to be on this screen from the 1st too, or
+  // 固定开销 would carry a reservation nothing on the page explains.
   const shareCycles = useMemo(
-    () => tabsForCycle(shareTabs, expenses, cycle).filter(t => t.rows.length > 0),
+    () => tabsForCycle(shareTabs, expenses, cycle).filter(t => t.rows.length > 0 || t.expectedNet != null),
     [shareTabs, expenses, cycle]
   );
 
@@ -343,21 +346,17 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
         value: num(a.budgeted),
       })),
       ...autoAllocations.map(a => ({ key: a.id, label: a.label, value: num(a.amount) })),
-      // ...and, once the CYCLE has ended, a 共摊本 that came out negative IS
-      // such a claim — it is inside `committed` at that point — so it needs a
-      // slice of its own or the circle silently under-reports by the amount
-      // he actually paid for the shared bills. A positive net is income, not
-      // a claim, and belongs nowhere in here.
-      //
-      // While the cycle is still LIVE, computeCycleBudget deliberately leaves
-      // the net out of `committed` — so the same gate has to apply here, or
-      // this circle would claim a share of income the number sitting right
-      // above it says hasn't been touched yet.
-      ...(hasCycleEnded(cycle) ? shareCycles.filter(t => t.isSpend).map(t => ({
-        key: `share:${t.id}`,
-        label: t.label,
-        value: t.ownShare,
-      })) : []),
+      // A 共摊本's claim on the month — his own share, reserved from the 1st
+      // while the month is live, the real figure once it has ended. Read off
+      // `shareBreakdown` rather than decided again here: this circle is drawn
+      // from the same claims 固定开销 above was, or the two would disagree
+      // about the one number the whole tab exists to produce. A tab that came
+      // out ahead is income, not a claim, and has no slice.
+      ...(budget.shareBreakdown ?? []).filter(b => b.committed > 0).map(b => ({
+        key: `share:${b.id}`,
+        label: b.basis === 'expected' ? `${b.label}（你出的）` : b.label,
+        value: b.committed,
+      })),
       ...cycleCategoryBreakdown.map(c => ({
         key: `cat:${c.category}`,
         // The category's own name, in Chinese, resolved through the same table
@@ -384,7 +383,7 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
       slices.push({ key: '__left', label: '还没花', value: budget.available, muted: true });
     }
     return slices;
-  }, [manualAllocations, autoAllocations, shareCycles, cycleCategoryBreakdown, budget.available,
+  }, [manualAllocations, autoAllocations, budget.shareBreakdown, cycleCategoryBreakdown, budget.available,
     cycle, todayStr, categoryPrefs, cycleOwnSpendMap]);
 
   // --- debt: this cycle's plan, and logging a repayment ---------------------
@@ -946,7 +945,8 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
           }}>
             这个周期有 <strong style={{ color: 'var(--color-accent-amber)' }}>{money(budget.arrivedUnlinked)}</strong> 进账没有归类，
             所以<strong>没有算进上面的收入</strong> —— 因为它可能就是上面某一笔，算两次会让你以为钱比较多。
-            去「今天」点开那笔进账，选一个来源，它就会自动算进这个月。
+            是你自己的收入：去「今天」点开那笔进账，选一个来源。
+            是朋友给的共摊钱：去「今天」的共摊本卡片按「对上」（按金额认得出来的会自己列在那里）。
           </div>
         )}
       </Section>
@@ -1080,20 +1080,42 @@ export default function CycleView({ expenses = [], onApproveExpense, onAddExpens
           title="共摊本 Shared"
           empty={false}
         >
-          {shareCycles.map(t => (
-            <Row
-              key={t.id}
-              title={t.label}
-              subtitle={<>付出去 {money(t.paidOut)} · 收到 {money(t.received)}</>}
-              subtitleColor="var(--text-muted)"
-              amount={`${t.isIncome ? '+' : '−'} ${money(Math.abs(t.net))}`}
-              amountColor={t.isIncome ? 'var(--color-money)' : 'var(--color-accent-red)'}
-            />
-          ))}
+          {shareCycles.map(t => {
+            // The figure the budget actually used for this tab — never
+            // re-derived here. See computeCycleBudget's shareBreakdown.
+            const used = (budget.shareBreakdown ?? []).find(b => String(b.id) === String(t.id));
+            const reserved = used?.basis === 'expected';
+            return (
+              <Row
+                key={t.id}
+                title={t.label}
+                subtitle={reserved
+                  ? <>预留你自己出的 · 目前付出去 {money(t.paidOut)} · 收到 {money(t.received)}</>
+                  : <>还没设每个人给多少，这个月没扣 · 付出去 {money(t.paidOut)} · 收到 {money(t.received)}</>}
+                subtitleColor={reserved ? 'var(--text-muted)' : 'var(--color-accent-amber)'}
+                amount={reserved
+                  ? `− ${money(used.committed)}`
+                  : `${t.isIncome ? '+' : '−'} ${money(Math.abs(t.net))}`}
+                amountColor={reserved || !t.isIncome ? 'var(--color-accent-red)' : 'var(--color-money)'}
+                dashed={!reserved}
+              />
+            );
+          })}
+          {/* Says only what is true of THIS month's tabs: "already inside
+              固定开销" is false for a tab with no members, which this month
+              is not reserving at all — and saying it anyway is how the old
+              wording promised a deduction that never happened. */}
           <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-            里面每一笔单独都不算数，只有净额进这个月的帐：
-            <strong>少的算支出</strong>（上面的固定开销里面有它），
-            <strong>多的算收入</strong>。要加东西进去，在「今天」记账时选共摊本。
+            里面每一笔单独都不算数。
+            {(budget.shareBreakdown ?? []).some(b => b.basis === 'expected') && (
+              <>这个月先按预计扣：<strong>账单 − 每个人该给的 = 你自己出的</strong>，
+                已经算在上面的固定开销里，朋友早给迟给都不会变；月底再按实际结算。</>
+            )}
+            {(budget.shareBreakdown ?? []).some(b => b.basis === 'none') && (
+              <>没设每个人每月给多少的本子<strong>这个月还没扣</strong> —
+                去「今天」的共摊本卡片加上，app 就会月初先预留你自己出的那份。</>
+            )}
+            要加东西进去，在「今天」记账时选共摊本。
           </p>
           {/* These rows are a read-out; the tab itself is edited on 今天. Said
               out loud with a button, because tapping a row here and having

@@ -603,10 +603,17 @@ export default function TngAutoCapture({
                   />
                 </div>
 
+                {/* Two different homes for money arriving, and the old hint only
+                    named one. A friend's share sent here filed as an income
+                    SOURCE becomes spendable income and never reaches the
+                    共摊本 — which then shows the bills out and nothing in. The
+                    共摊本 card also finds these on its own by amount (see
+                    ShareTabMembers), so this is the second way in, not the only. */}
                 {item.isMoneyIn && (
                   <p style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
-                    户口余额会加，但<strong>本月收入不会动</strong> — 去「本月」把它归到一个来源，
-                    才知道这是不是你已经列过的那一笔。
+                    户口余额会加，但<strong>本月收入不会动</strong>。
+                    是朋友给的房租/共摊钱 → 记了之后去「共摊本」卡片按「对上」；
+                    是你自己的收入 → 去「本月」归到一个来源。
                   </p>
                 )}
 

@@ -2,6 +2,50 @@
 
 Tracks progress toward turning the LifeManager mockup into a complete personal app. Updated as we go.
 
+## M60 — 共摊本 reserves his share from the 1st, spreads prepayments, knows who pays what ✅ done — v1.19.0
+
+He came back 2026-09-28 having worked his whole month out with ChatGPT — 工资 1,000 + 爸爸 2,500 +
+five friends' 1,965.60 − rent/TIME/Spotify 2,231.85 = **RM3,233.75** usable — and asked whether the
+app could actually tell his own spending apart from the friends' money. The audit found it could not
+show that number anywhere:
+
+- **The tab's net reached no visible figure.** M58's 「不压，月底才结算」 gated the net on
+  `hasCycleEnded`, but 本月 only ever renders the LIVE cycle and the text export never passed
+  `shareLines` at all — so the ended-cycle branch was dead code for every screen. His real share
+  (RM266.25) was in no total; 「这个月还剩」 read RM3,500. CycleView's 共摊本 section even said
+  「上面的固定开销里面有它」 while it wasn't.
+- **A prepayment distorted every month it touched.** Friend 2's RM1,251.60 for 10–12 月 landed whole
+  in the month it arrived.
+- **TNG-captured friend transfers could never reach the tab** — the review queue files arrivals
+  unlinked and told him to pick an income SOURCE.
+- **A test time bomb:** test-sharetabs asserted "September is still live" off the real clock and
+  would have failed on 1 October.
+
+Asked, he chose: reserve the expected share from the 1st (「月初先预留」), spread multi-month payments
+evenly, and — reversing two earlier refusals — store each friend's monthly amount.
+
+**What shipped.** A tab carries `members` (`{id,name,amount,aliases}`) beside its `bills`; the
+expected net is `members − max(bills, actually paid out)` (`expectedForCycle`), null without members.
+`computeCycleBudget` now decides once — live cycle → expected, ended → actual — and returns
+`shareBreakdown` so the pie, the 共摊本 section and the export read the same figure instead of each
+re-deciding; it also takes `today` so tests pin the clock. A tabbed record can carry `coversFrom` +
+`coversMonths` and is split to the sen across those cycles (`portionIn`); account balances are
+untouched. `ShareTabMembers.jsx`: each friend's month (已给/还差/还没给/多了 → 「是预付吗？」), plus
+every unmatched arrival this month — in the tab with nobody named, or loose TNG arrivals matching a
+member exactly by amount or learned sender name — with 对上 / 全部照建议对上. Matching is PLANNED
+(one-month payments first, oldest first, then multi-month) — caught live: deciding each alone offered
+the RM1,251.60 as 9–11 月 because B's September RM417.20 wasn't matched yet. The entry form gained
+「谁给的」 and 「这笔算哪个月的」 (guessed until touched; edits get a 套用 hint, never a silent
+change). The 结算 banner compares actual to planned and names who fell short. The export now has the
+tab inside 固定开销 and its own 【共摊本】 section. `withoutTab`/`intoTab` clear stale bill/member
+links when 归类中心 moves records.
+
+Verified in the browser with his real numbers: before members 本月 read 还剩 RM3,487.50 with 固定开销
+RM0; after adding the five friends it read RM3,221.25 (= 3,233.75 − RM12.50 of lunch), 固定开销
+RM266.25, pie slice 房友共摊（你出的）; 全部照建议对上 filed all six September arrivals correctly
+(the RM1,251.60 as 10–12 月, a TNG 「LIM WEI JIE」 as Friend E with the alias learned); the August
+banner read 「实际多出了 RM417.20 · 还没给齐：Friend B」. No overflow at 375px; suite and lint green.
+
 ## M59 — 欠款打勾: a repayment tags the record instead of writing a second one ✅ done — v1.14.0
 
 The gap named in the 2026-09-20 check-in: 「这笔是固定月费吗」 already let a logged payment BECOME its

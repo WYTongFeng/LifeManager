@@ -237,5 +237,59 @@ const monthHealth = buildHealthReport({
 has('health uses the same month boundary', monthHealth, '这个月的饭');
 lacks('...so the two reports can be read side by side', monthHealth, '上个月的饭');
 
+// --- 共摊本 (2026-09-28) -------------------------------------------------------
+// Until this, the export never passed the tabs in at all: his share of rent +
+// TIME + Spotify (RM266.25) was in no figure of the report, and the month read
+// RM3,500 when it was RM3,233.75. The report is pasted at an AI — which is how
+// he worked his month out in the first place.
+const OCT_NOW = new Date(2026, 9, 10, 20, 0);
+const houseTab = {
+  id: 'house', label: '房友共摊',
+  bills: [
+    { id: 'rent', label: '房租', amount: 2000, dueDay: 1 },
+    { id: 'time', label: 'TIME', amount: 210.95, dueDay: 1 },
+    { id: 'spot', label: 'Spotify', amount: 20.90, dueDay: 1 },
+  ],
+  members: [
+    { id: 'f1', name: '朋友1', amount: 448 },
+    { id: 'f2', name: '朋友2', amount: 417.20 },
+    { id: 'f3', name: '朋友3', amount: 413.20 },
+    { id: 'f4', name: '朋友4', amount: 327.20 },
+    { id: 'f5', name: '朋友5', amount: 360 },
+  ],
+};
+const octRecords = [
+  { id: 501, merchant: '房租', amount: 2000, shareTabId: 'house', date: '2026-10-01', time: '10:00' },
+  { id: 502, merchant: 'YAP LEE CHIN', amount: -448, isMoneyIn: true, shareTabId: 'house', shareTabMemberId: 'f1', date: '2026-10-03', time: '11:00' },
+  // Friend 2's three months, sent in September and spread over 10–12 月.
+  { id: 503, merchant: '朋友2', amount: -1251.60, isMoneyIn: true, shareTabId: 'house', shareTabMemberId: 'f2', coversFrom: '2026-10-01', coversMonths: 3, date: '2026-09-27', time: '21:00' },
+];
+const shared = buildMoneyReport({
+  expenses: octRecords,
+  incomeSources: [
+    { id: 'pay', label: '工资', amount: 1000, kind: 'income' },
+    { id: 'dad', label: '爸爸生活费', amount: 2500, kind: 'income' },
+  ],
+  shareTabs: [houseTab],
+  now: OCT_NOW,
+});
+has('his own share is named inside 固定开销', shared, '其中「房友共摊」你自己出的');
+has('...at the planned 266.25', shared, 'RM 266.25（按每个人该给的先预留）');
+has('...so the month reads 3,233.75, his own number', shared, 'RM 3233.75');
+has('the tab has its own section', shared, '【共摊本】');
+has('...stating the plan', shared, '计划：账单 RM 2231.85 · 他们每月该给 RM 1965.60 · 你自己出 RM 266.25');
+has('...who has paid, by member', shared, '朋友1');
+check('...and who has not',
+  shared.split('\n').some(l => l.includes('朋友3') && l.includes('还没给')), true);
+check('the spread prepayment counts as friend 2\'s October',
+  shared.split('\n').some(l => l.includes('朋友2') && l.includes('已给齐')), true);
+check('a matched arrival is printed with the member, not just the TNG sender',
+  shared.split('\n').some(l => l.includes('YAP LEE CHIN') && l.includes('[朋友1]')), true);
+
+const withSpreadLog = buildMoneyReport({
+  expenses: octRecords, shareTabs: [houseTab], now: OCT_NOW,
+});
+has('a spread record says on its line which months it counts toward', withSpreadLog, '算 10–12 月，平均分');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

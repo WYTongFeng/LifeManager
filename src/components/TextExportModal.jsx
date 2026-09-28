@@ -62,6 +62,9 @@ export default function TextExportModal({ onClose }) {
         incomeSources: loadJSON('incomeSources', []),
         allocations: loadJSON('allocations', []),
         dailyBudget: loadJSON('dailyBudget', 0),
+        // Without it the export's 固定开销 never contained his share of the
+        // shared bills — see buildMoneyReport.
+        shareTabs: loadJSON('shareTabs', []),
         ...span,
       });
     }

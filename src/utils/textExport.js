@@ -24,6 +24,7 @@
 import { num, sumBy } from './num.js';
 import { isSpendingRecord, isTransferRecord, resolveAccounts, typeMeta } from './accounts.js';
 import { getCycle, getPreviousCycle, isInCycle, computeCycleBudget } from './cycle.js';
+import { budgetLinesForCycle, tabsForCycle, membersStatus, coverageLabel } from './shareTabs.js';
 import { describeDate, toHHMM, sortByTime, todayStr } from './datetime.js';
 import { countSets } from './workoutPlan.js';
 import { SESSION_INTENSITY } from './calories.js';
@@ -139,8 +140,13 @@ function byDate(records = []) {
  * this wrong is the single most common way a figure in this app goes wrong; see
  * accounts.js.
  */
-function dailyLog(expenses, { today = todayStr() } = {}) {
+function dailyLog(expenses, { today = todayStr(), shareTabs = [] } = {}) {
   const rows = [];
+  // Who a tabbed arrival came from, by the member it was matched to — the
+  // record's own merchant is often a TNG sender name the reader cannot map.
+  const memberName = (e) => shareTabs
+    .find(t => String(t.id) === String(e.shareTabId))
+    ?.members?.find(m => String(m.id) === String(e.shareTabMemberId))?.name ?? null;
   // No slice: the caller has already narrowed to the window it wants. Cutting
   // to "the most recent N days" on top of that would silently drop the oldest
   // days of the very month being exported.
@@ -179,7 +185,16 @@ function dailyLog(expenses, { today = todayStr() } = {}) {
         pad(rm(Math.abs(amount)), 12),
         e.category || '',
       ];
-      const note = [e.paymentMethod, e.note].filter(Boolean).join(' · ');
+      // A spread record is printed on the day it moved, but counts toward the
+      // months it covers — said on the line, or a reader summing September's
+      // 共摊·收 rows gets a figure the tab section above never used.
+      const cover = e.shareTabId != null ? coverageLabel(e) : null;
+      const who = e.shareTabId != null ? memberName(e) : null;
+      const note = [
+        who,
+        cover ? `算 ${cover}，平均分` : null,
+        e.paymentMethod, e.note,
+      ].filter(Boolean).join(' · ');
       rows.push(parts.join(' ').trimEnd() + (note ? `  [${note}]` : ''));
     }
   }
@@ -206,12 +221,50 @@ function categoryTotals(expenses) {
 }
 
 /**
+ * Each 共摊本 for the report's cycle: the plan (the bills against what each
+ * member is due), what actually moved, which of the two the month counted, and
+ * who has paid. The one section a reader needs to see that the RM2,000 rent in
+ * the daily log is NOT RM2,000 of his spending — and what it really cost him.
+ */
+function shareSection(shareTabs, expenses, cycle, budget) {
+  const tabs = tabsForCycle(shareTabs, expenses, cycle)
+    .filter(t => t.rows.length > 0 || t.expectedNet != null);
+  if (tabs.length === 0) return null;
+  const rows = [];
+  for (const t of tabs) {
+    const raw = shareTabs.find(x => String(x.id) === String(t.id));
+    const used = (budget.shareBreakdown ?? []).find(b => String(b.id) === String(t.id));
+    rows.push(`  ${t.label}`);
+    if (t.expectedNet != null) {
+      rows.push(`    计划：账单 ${rm(t.expectedOut)} · 他们每月该给 ${rm(t.expectedIn)} · 你自己出 ${rm(Math.max(0, -t.expectedNet))}`);
+    }
+    rows.push(`    这个月：付出去 ${rm(t.paidOut)} · 收到 ${rm(t.received)} · 净额 ${t.net < 0 ? '−' : '+'}${rm(Math.abs(t.net))}`);
+    if (used) {
+      const how = used.basis === 'expected' ? `按计划预留 ${rm(used.committed)}（月底才按实际结算）`
+        : used.basis === 'none' ? '还没设每个人给多少，没算进这个月'
+        : used.committed > 0 ? `按实际 ${rm(used.committed)}`
+        : used.income > 0 ? `收多过付 ${rm(used.income)}，算收入`
+        : '刚好打平';
+      rows.push(`    算进这个月的：${how}`);
+    }
+    for (const m of membersStatus(raw, expenses, cycle)) {
+      const state = m.state === 'paid' ? '已给齐'
+        : m.state === 'unpaid' ? '还没给'
+        : m.state === 'partial' ? `还差 ${rm(m.short)}`
+        : `多给了 ${rm(m.extra)}`;
+      rows.push(`      ${pad(m.name, 14)} 每月 ${pad(rm(m.due), 12)} 这个月给了 ${pad(rm(m.paid), 12)} ${state}`);
+    }
+  }
+  return rows;
+}
+
+/**
  * A money report: balances, this cycle's position, category totals, and the
  * day-by-day log.
  */
 export function buildMoneyReport({
   expenses = [], accounts: rawAccounts = [], debts = [],
-  incomeSources = [], allocations = [], dailyBudget = 0,
+  incomeSources = [], allocations = [], dailyBudget = 0, shareTabs = [],
   from = null, to = null, rangeLabel = null, now = new Date(),
 } = {}) {
   const today = todayStr(now);
@@ -239,7 +292,13 @@ export function buildMoneyReport({
   // from one month would report what the account would hold if the user had
   // come into existence on the 1st.
   const accounts = resolveAccounts(rawAccounts, expenses);
-  const budget = computeCycleBudget({ incomeSources, allocations, expenses, cycle });
+  // The 共摊本 go in exactly as 本月 hands them over: expected share while the
+  // month is live, the real net once it has ended — computeCycleBudget decides
+  // which, against the report's own clock. Left out (as they were until
+  // 2026-09-28), his share of rent + TIME + Spotify was in no figure of this
+  // report at all, and a reader was told the month had ~RM266 more than it did.
+  const shareLines = budgetLinesForCycle(shareTabs, expenses, cycle);
+  const budget = computeCycleBudget({ incomeSources, allocations, expenses, cycle, shareLines, today: now });
   const inCycle = expenses.filter(e => isInCycle(e.date ?? cycle.start, cycle));
 
   const isCurrent = isInCycle(today, cycle);
@@ -259,6 +318,12 @@ export function buildMoneyReport({
     `  ${pad('收入（设定）', 18)}${rm(budget.spendableIncome)}`,
     budget.arrivedThisCycle > 0 ? `  ${pad('实际进账', 18)}${rm(budget.arrivedThisCycle)}` : null,
     `  ${pad('固定开销', 18)}${pad(rm(budget.committed), 14)}（房租/订阅/欠款，已预留）`,
+    // Named inside 固定开销, with which figure it is, so a reader can see the
+    // shared bills were counted once and only as his own share.
+    ...(budget.shareBreakdown ?? []).filter(b => b.committed > 0).map(b =>
+      `    ${pad(`其中「${b.label}」你自己出的`, 26)}${rm(b.committed)}${b.basis === 'expected' ? '（按每个人该给的先预留）' : '（实际结算）'}`),
+    ...(budget.shareBreakdown ?? []).filter(b => b.income > 0).map(b =>
+      `  ${pad(`「${b.label}」收多过付`, 18)}${rm(b.income)}（已算进收入）`),
     `  ${pad('已经花掉', 18)}${rm(budget.grossSpentThisCycle)}`,
     budget.receivedThisCycle > 0 ? `  ${pad('收到退款/还款', 18)}${rm(budget.receivedThisCycle)}` : null,
     budget.repaidThisCycle > 0 ? `  ${pad('还债', 18)}${rm(budget.repaidThisCycle)}` : null,
@@ -284,6 +349,8 @@ export function buildMoneyReport({
   out.push(section('【固定月费】', allocations.length === 0 ? null :
     allocations.map(a => `  ${pad(a.label || '（未命名）', 26)} ${rm(a.amount ?? a.estimate)}${a.variable ? '（浮动，估算）' : ''}`)));
 
+  out.push(section(`【共摊本】（${cycle.start} → ${cycle.end}）`, shareSection(shareTabs, expenses, cycle, budget)));
+
   out.push(section(`【这个周期的分类支出】（${cycle.start} → ${cycle.end}）`, categoryTotals(inCycle)));
   // Only worth printing when the window is not already the whole history —
   // otherwise it is the section above, repeated verbatim.
@@ -291,7 +358,7 @@ export function buildMoneyReport({
     out.push(section(`【全部分类支出】（有记录以来，不限这个范围）`, categoryTotals(expenses)));
   }
 
-  const log = dailyLog(windowed, { today });
+  const log = dailyLog(windowed, { today, shareTabs });
   // Two different facts, and conflating them would hide the more important
   // one: "you logged nothing in August" and "you have never logged anything"
   // want completely different reactions from whoever reads this.

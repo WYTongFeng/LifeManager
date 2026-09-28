@@ -175,11 +175,16 @@ export function isEstimated(allocation, cycle) {
  */
 export function computeCycleBudget({
   incomeSources = [], allocations = [], expenses = [], cycle, shareLines = [],
+  // The clock, as a parameter. Whether `cycle` has ended — and so which of a
+  // tab's two figures counts — depends on it, and a suite that asserts "this
+  // September cycle is still live" off the real clock starts failing on
+  // 1 October. Every screen omits it and gets now.
+  today = new Date(),
 }) {
   // 共摊本 — see shareTabs.js. Every record filed under one is budget-neutral
   // ON ITS OWN: the RM2,000 rent is not spending, the RM354 a housemate sends
-  // back is not income. Only the tab's NET for this cycle crosses over, and it
-  // arrives here pre-computed in `shareLines` as [{ id, label, net }].
+  // back is not income. Only the tab's net crosses over, and it arrives here
+  // pre-computed in `shareLines` as [{ id, label, net, expectedNet }].
   //
   // His rule, and the whole reason this exists: 「多的算收入，少的算支出，就是
   // 结果才算，中间不用算」.
@@ -189,38 +194,50 @@ export function computeCycleBudget({
   // would charge the same ringgit twice, which is the failure this file spends
   // most of its length avoiding.
   const inShareTab = (e) => e?.shareTabId != null;
-  const todayStr = ymd(new Date());
+  const todayStr = ymd(today);
 
-  // A LIVE cycle's net does not press the budget — only a cycle that has
-  // ENDED does. His own words, 2026-09-20: "不压，月底才结算" — a housemate two
-  // days from paying is not a bill this cycle should take as already lost, so
-  // the daily allowance has to read exactly as if the tab did not exist while
-  // the month is still running.
+  // WHICH OF A TAB'S TWO FIGURES COUNTS — decided here, once.
   //
-  // "结算" itself needs no separate stamp to check here: a cycle whose `end`
-  // is in the past has nothing left to wait for, so it settles automatically
-  // the moment it's over. The one place besides the live 共摊本 card that ever
-  // asks this question again is textExport.js's 上个月 report — a PAST month,
-  // exported as text, has to show what the tab really cost that month, not a
-  // figure still frozen on "still waiting". (A user-facing "结算" button, if
-  // one ever exists, would only be an acknowledgment UI sits on top of this —
-  // never a second source of truth for whether the net counts.) Anything else
-  // that draws a claim on this cycle's income from a 共摊本 — CycleView's 钱去
-  // 哪里了 pie included — has to ask the same exported `hasCycleEnded`, or it
-  // will disagree with the numbers sitting right above it.
+  //   a LIVE cycle   → the EXPECTED net: every friend's monthly amount minus the
+  //                    bills (see expectedForCycle). Reserved from the 1st like
+  //                    any other bill, so a friend paying early or late moves
+  //                    nothing mid-month — 「不压」 (2026-09-20) is kept.
+  //   an ENDED cycle → the ACTUAL net: 「月底才结算」. Needs no stamp — a cycle
+  //                    whose `end` is past has nothing left to wait for.
+  //
+  // WHY THE LIVE HALF CHANGED (2026-09-28). It used to be "nothing": a live
+  // cycle ignored the tab entirely, on the promise that the month would settle
+  // once it ended. But 本月 only ever shows the LIVE cycle — the settled month
+  // was on no screen at all — so his own share of rent + TIME + Spotify,
+  // about RM266 a month, reached no figure anywhere, and 「这个月还剩」 said
+  // RM3,500 when the truth was RM3,233.75. He chose 「月初先预留」 over keeping
+  // the old rule and adding a last-month card.
+  //
+  // A tab with no members has no expectation (null) and still reserves nothing
+  // while live — there is nothing to reserve against until he says who pays
+  // what. Expected INCOME is never banked early: a tab planned to come out
+  // ahead reserves nothing and counts its surplus only once the month is over,
+  // which is the reassuring direction staying shut.
+  //
+  // Anything else that draws a claim on this cycle's income from a 共摊本 —
+  // CycleView's 钱去哪里了 pie included — reads `shareBreakdown` below rather
+  // than deciding again, or it will disagree with the numbers above it.
   const cycleHasEnded = hasCycleEnded(cycle, todayStr);
-
-  // The share tabs, folded in once each — but only once the cycle is over. A
-  // negative net is money he really is out of pocket for that cycle, so it
-  // joins 固定开销; a positive one means the tab collected more than it spent,
-  // which is income. Nothing in between ever reaches the budget, ended or not
-  // — that is the entire rule.
-  const shareCommitted = cycleHasEnded
-    ? shareLines.reduce((t, l) => t + (l.net < 0 ? -l.net : 0), 0)
-    : 0;
-  const shareIncome = cycleHasEnded
-    ? shareLines.reduce((t, l) => t + (l.net > 0 ? l.net : 0), 0)
-    : 0;
+  const shareBreakdown = shareLines.map(l => {
+    const basis = cycleHasEnded ? 'actual' : (l.expectedNet != null ? 'expected' : 'none');
+    const value = basis === 'actual' ? (Number(l.net) || 0)
+      : basis === 'expected' ? (Number(l.expectedNet) || 0)
+      : 0;
+    return {
+      id: l.id,
+      label: l.label,
+      basis,
+      committed: value < 0 ? -value : 0,
+      income: basis === 'actual' && value > 0 ? value : 0,
+    };
+  });
+  const shareCommitted = shareBreakdown.reduce((t, b) => t + b.committed, 0);
+  const shareIncome = shareBreakdown.reduce((t, b) => t + b.income, 0);
 
   const sum = (list, pick = x => x.amount) =>
     list.reduce((total, item) => total + (Number(pick(item)) || 0), 0);
@@ -561,9 +578,12 @@ export function computeCycleBudget({
     committedCharged,
     committedUnpaid,
     // The share tabs' two halves, reported so the screen can name them instead
-    // of leaving an unexplained lump inside 固定开销.
+    // of leaving an unexplained lump inside 固定开销 — and per tab, with which
+    // figure each one used, so the pie and the 共摊本 section can say 预留 or
+    // 实际 without deciding it a second time.
     shareCommitted,
     shareIncome,
+    shareBreakdown,
     // Bills paid out of a 代管 account: real, dated, worth seeing — and
     // deliberately not inside `committed`, because they are not his money.
     custodialCommitted,

@@ -10,6 +10,7 @@ import { categoryKindFor, resolveCategoryId } from '../utils/moneyCategories';
 import {
   recordOwnership, OWNERSHIP, OWNERSHIP_META, OWNERSHIP_FILTERS,
 } from '../utils/recordOwnership';
+import { intoTab, withoutTab } from '../utils/shareTabs';
 
 const money = (n) => `RM ${num(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -191,10 +192,14 @@ export default function ReclassifyCenter({
       const eligibleIds = new Set(pending.eligible.map(e => e.id));
       for (const e of pending.eligible) {
         if (e.allocationId != null) detachAllocationLink(e, eligibleIds);
-        onSaveExpense({ ...e, shareTabId: resolvedTabId, allocationId: null, isProject: false });
+        // intoTab, not a bare `shareTabId` write: a record moving over from a
+        // DIFFERENT tab would otherwise keep that tab's bill and member links,
+        // pointing into a book it no longer belongs to.
+        onSaveExpense({ ...intoTab(e, resolvedTabId), allocationId: null, isProject: false });
       }
     } else if (pending.type === 'fromTab') {
-      for (const e of pending.eligible) onSaveExpense({ ...e, shareTabId: null });
+      // Every tab-scoped field goes, not just the tab — see withoutTab.
+      for (const e of pending.eligible) onSaveExpense(withoutTab(e));
     } else if (pending.type === 'category') {
       for (const e of pending.eligible) onSaveExpense({ ...e, category: pending.targetCategory });
     }

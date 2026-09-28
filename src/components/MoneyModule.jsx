@@ -35,10 +35,14 @@ import { isNativeAvailable } from '../utils/tngNative';
 import { getCycle } from '../utils/cycle';
 import { setCycleActual } from '../utils/recurring';
 import { debtOutstanding } from '../utils/networth';
-import { tabsForCycle, contributors, outgoings } from '../utils/shareTabs';
+import {
+  tabsForCycle, contributors, outgoings, suggestMember, suggestCoverage, monthsWorth,
+  coverageLabel, learnMemberAlias, MAX_COVER_MONTHS,
+} from '../utils/shareTabs';
 import ReclassifyCenter from './ReclassifyCenter';
 import ShareTabSettle from './ShareTabSettle';
 import ShareTabBills from './ShareTabBills';
+import ShareTabMembers from './ShareTabMembers';
 import ShareTabSettings from './ShareTabSettings';
 import { OWNERSHIP } from '../utils/recordOwnership';
 import { confirmDelete } from './ConfirmDialog';
@@ -255,6 +259,18 @@ export default function MoneyModule({
   // this form itself. Lets 「房租 5号」 read 已付 the moment this saves,
   // the same way `allocationId` does for a plain 固定月费.
   const [formShareTabBillId, setFormShareTabBillId] = useState('');
+  // 谁给的 — which of the tab's members this incoming money is from. Filled in
+  // from the amount or the sender's name until he touches it (see the
+  // `effective…` values below), exactly like the 共摊本 guess above it.
+  const [formShareTabMemberId, setFormShareTabMemberId] = useState('');
+  const [formMemberTouched, setFormMemberTouched] = useState(false);
+  // 这笔算哪个月的 — '' is the ordinary case, "the month of its date". Set, it
+  // spreads the record evenly over `formCoversMonths` months from that one:
+  // his 「平均分到那几个月」 for RM1,251.60 sent for 10–12 月. See shareTabs.js.
+  const [formCoversFrom, setFormCoversFrom] = useState('');
+  const [formCoversMonths, setFormCoversMonths] = useState('1');
+  const [formCoverTouched, setFormCoverTouched] = useState(false);
+  const [formCoverExpanded, setFormCoverExpanded] = useState(false);
   // 「这笔每个月都有」. Creating a 固定月费 needed a trip to 本月 and back, which
   // is one screen too many at the moment you notice you have one — the day you
   // pay it IS when you know. `formBillDueDay` is the only thing the ledger
@@ -316,6 +332,7 @@ export default function MoneyModule({
   const shareCycles = useMemo(
     () => tabsForCycle(shareTabs, allExpenses ?? expenses, moneyCycle)
       .filter(t => t.rows.length > 0
+        || t.expectedNet != null
         || shareTabs.find(st => String(st.id) === String(t.id))?.bills?.length > 0),
     [shareTabs, allExpenses, expenses, moneyCycle]
   );
@@ -544,6 +561,12 @@ export default function MoneyModule({
   const shareTabName = (item) => (item?.shareTabId == null
     ? null
     : shareTabs.find(t => String(t.id) === String(item.shareTabId))?.label ?? '共摊本');
+  // Who, among that tab's members — null when nobody is named, or the member
+  // has since been removed (the money still counts; it just has no name).
+  const shareTabMemberName = (item) => (item?.shareTabMemberId == null
+    ? null
+    : shareTabs.find(t => String(t.id) === String(item.shareTabId))
+      ?.members?.find(m => String(m.id) === String(item.shareTabMemberId))?.name ?? null);
 
   const transferEntries = daySorted.filter(isTransferRecord);
   const realExpenses = daySorted.filter(item => !isTransferRecord(item));
@@ -638,6 +661,12 @@ export default function MoneyModule({
     setFormShareTabBillId('');
     setFormShareTabTouched(false);
     setFormShareTabExpanded(false);
+    setFormShareTabMemberId('');
+    setFormMemberTouched(false);
+    setFormCoversFrom('');
+    setFormCoversMonths('1');
+    setFormCoverTouched(false);
+    setFormCoverExpanded(false);
     setFormNewBill(false);
     setFormBillDueDay('');
   };
@@ -704,6 +733,15 @@ export default function MoneyModule({
     // there truly is nothing (an ordinary record staying ordinary).
     setFormShareTabTouched(true);
     setFormShareTabExpanded(expense.shareTabId != null);
+    // What the record already says, as a deliberate choice — an edit never
+    // has a guess silently applied over it. A guess that differs is still
+    // OFFERED, with a 套用 button (see the 算哪个月 block in the form).
+    setFormShareTabMemberId(expense.shareTabMemberId != null ? String(expense.shareTabMemberId) : '');
+    setFormMemberTouched(true);
+    setFormCoversFrom(expense.coversFrom ?? '');
+    setFormCoversMonths(String(expense.coversMonths ?? 1));
+    setFormCoverTouched(true);
+    setFormCoverExpanded(expense.coversFrom != null);
     setFormNewBill(false);
     setFormBillDueDay('');
     setShowEntryModal(true);
@@ -754,6 +792,44 @@ export default function MoneyModule({
       setFormShareTabId(stillLive ? String(suggestion) : '');
       setFormShareTabExpanded(stillLive);
     }
+  };
+
+  // --- 谁给的 / 算哪个月的: the guess, and what the form will actually save ---
+  //
+  // Derived at render rather than written into state by an effect: until he
+  // touches a field, its value IS the current guess, recomputed as he types
+  // the amount or the name — the same way the 共摊本 guess tracks the merchant.
+  // Touching it freezes his choice. An edit starts touched (openEditModal), so
+  // a guess is only ever offered there, never applied.
+  const formTab = formShareTabId && formShareTabId !== '__new'
+    ? shareTabs.find(t => String(t.id) === String(formShareTabId)) ?? null
+    : null;
+  const formTabMembers = formTab?.members ?? [];
+  const memberGuess = formTab && formRefund
+    ? suggestMember(formTab, { amount: formAmount, merchant: formMerchant })
+    : null;
+  const effectiveMemberId = formTab && formRefund
+    ? (formMemberTouched ? formShareTabMemberId : (memberGuess ? String(memberGuess.memberId) : ''))
+    : '';
+  const effectiveMember = formTabMembers.find(m => String(m.id) === effectiveMemberId) ?? null;
+  // The month this record would belong to on its own — the default the
+  // 算哪个月 picker falls back to, and what "no spread" means.
+  const formOwnMonth = getCycle(new Date(`${formDate || today}T12:00:00`)).start;
+  const coverGuess = formTab && effectiveMember
+    ? suggestCoverage(formTab, effectiveMember.id, monthsWorth(effectiveMember, formAmount) ?? 1,
+      formDate || today, allExpenses ?? expenses, editingId)
+    : null;
+  const effectiveCoversFrom = !formTab ? ''
+    : formCoverTouched ? formCoversFrom : (coverGuess?.coversFrom ?? '');
+  const effectiveCoversMonths = !formTab ? 1
+    : Math.max(1, Math.min(MAX_COVER_MONTHS, Math.floor(Number(
+      formCoverTouched ? formCoversMonths : (coverGuess?.coversMonths ?? 1))) || 1));
+  // Freezing the spread: whichever field he touches, the other keeps what it
+  // was SHOWING, so moving the month count can't silently reset the month.
+  const touchCover = ({ from, months }) => {
+    setFormCoverTouched(true);
+    setFormCoversFrom(from ?? (effectiveCoversFrom || formOwnMonth));
+    setFormCoversMonths(String(months ?? effectiveCoversMonths));
   };
 
   const handleSubmitEntry = (e) => {
@@ -903,6 +979,17 @@ export default function MoneyModule({
     // never picking one) must drop the bill link with it, not leave a
     // shareTabBillId pointing nowhere once shareTabId itself is null.
     const shareTabBillId = shareTabId ? (formShareTabBillId || null) : null;
+    // Same rule for the member (incoming money only — nobody "gives" a bill)
+    // and the spread. `formTab` is null for a tab created in this very save,
+    // which has no members to name and no months to spread over yet.
+    const shareTabMemberId = shareTabId && formTab && formRefund && effectiveMemberId
+      ? effectiveMemberId : null;
+    // A spread that says "just the month of its own date" is no spread — it is
+    // stored as nothing at all, so an ordinary record stays an ordinary shape.
+    const spreadsElsewhere = shareTabId && formTab && effectiveCoversFrom
+      && !(effectiveCoversMonths === 1 && effectiveCoversFrom === getCycle(new Date(yy, mm - 1, dd)).start);
+    const coversFrom = spreadsElsewhere ? effectiveCoversFrom : null;
+    const coversMonths = spreadsElsewhere ? effectiveCoversMonths : null;
 
     // onSaveExpense, not setExpenses. `setExpenses` can only write today by
     // construction (useTodayRecords in App.jsx), so saving a record dated
@@ -925,6 +1012,9 @@ export default function MoneyModule({
       repaysDebtId,
       shareTabId,
       shareTabBillId,
+      shareTabMemberId,
+      coversFrom,
+      coversMonths,
       // Stamped at birth, same as makeTransfer and makeRepayment do. `txType`
       // would derive the same answer from the flags either way — that fallback
       // is permanent — but a record that says what it is beats one that has to
@@ -950,6 +1040,13 @@ export default function MoneyModule({
 
     teach(formMerchant, formCategory);
     teachShareTab(formMerchant, shareTabId);
+    // What TNG calls a friend is rarely what he calls them. Once he has said
+    // "this sender is 朋友2" by saving it, the name alone finds them next time.
+    if (shareTabMemberId && formMerchant.trim()) {
+      const live = loadJSON('shareTabs', []);
+      const learnedTabs = learnMemberAlias(live, shareTabId, shareTabMemberId, formMerchant);
+      if (learnedTabs !== live) saveJSON('shareTabs', learnedTabs);
+    }
     resetForm();
     setShowEntryModal(false);
   };
@@ -1630,22 +1727,51 @@ export default function MoneyModule({
                     />
                   )}
 
-                  {/* The one number. Everything else on this card explains it. */}
-                  <div style={{ marginTop: '8px', display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-                    <span style={{
-                      fontSize: '1.35rem', fontWeight: '800',
-                      color: t.isIncome ? 'var(--color-money)' : 'var(--color-accent-red)',
-                    }}>
-                      {t.isIncome ? '+' : '−'} RM {Math.abs(t.net).toFixed(2)}
-                    </span>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                      {t.isIncome ? '这个月收多过付 · 算收入' : '这个月我实际出的'}
-                    </span>
-                  </div>
+                  {/* The one number. Everything else on this card explains it.
+                      With members, it is his planned share — the figure 本月
+                      reserved on the 1st — and the live flows sit under it
+                      as progress, not as a verdict: rent gone on the 1st and
+                      nobody paid yet is "−RM2,231.85 so far", which is true
+                      and not what the month will cost him. */}
+                  {t.expectedNet != null ? (
+                    <>
+                      <div style={{ marginTop: '8px', display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
+                        <span style={{
+                          fontSize: '1.35rem', fontWeight: '800',
+                          color: t.expectedNet < 0 ? 'var(--color-accent-red)' : 'var(--color-money)',
+                        }}>
+                          {t.expectedNet < 0 ? '−' : '+'} RM {Math.abs(t.expectedNet).toFixed(2)}
+                        </span>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                          {t.expectedNet < 0 ? '每月你自己出的 · 这个月已经预留' : '预计收多过付 · 月底才算收入'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.5 }}>
+                        目前 付出去 RM {t.paidOut.toFixed(2)} · 收到 RM {t.received.toFixed(2)}
+                        {t.expectedIn - t.received > 0.005 && (
+                          <> · 还有 RM {(t.expectedIn - t.received).toFixed(2)} 没收到</>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ marginTop: '8px', display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+                        <span style={{
+                          fontSize: '1.35rem', fontWeight: '800',
+                          color: t.isIncome ? 'var(--color-money)' : 'var(--color-accent-red)',
+                        }}>
+                          {t.isIncome ? '+' : '−'} RM {Math.abs(t.net).toFixed(2)}
+                        </span>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                          {t.isIncome ? '这个月收多过付 · 算收入' : '这个月我实际出的'}
+                        </span>
+                      </div>
 
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    付出去 RM {t.paidOut.toFixed(2)} · 收到 RM {t.received.toFixed(2)}
-                  </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        付出去 RM {t.paidOut.toFixed(2)} · 收到 RM {t.received.toFixed(2)}
+                      </div>
+                    </>
+                  )}
 
                   {bills.length > 0 && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '9px' }}>
@@ -1655,15 +1781,20 @@ export default function MoneyModule({
                           background: 'var(--bg-input)', border: '1px solid var(--border-glass)',
                           color: 'var(--text-secondary)',
                         }}>
-                          {b.merchant} {num(b.amount).toFixed(2)}
+                          {/* This month's portion — TIME paid three months
+                              ahead is RM210.95 of this month, not RM632.85. */}
+                          {b.merchant} {num(b.portion).toFixed(2)}
+                          {coverageLabel(b) ? `（${coverageLabel(b)}）` : ''}
                         </span>
                       ))}
                     </div>
                   )}
 
-                  {/* Who put money in. Reported, never planned — he said he
-                      does not want a list of who owes what. */}
-                  {paidBy.length > 0 ? (
+                  {/* Who put money in, by the name on the record — the only
+                      view a tab with no members has. A tab WITH members shows
+                      the planned side instead (ShareTabMembers below), which
+                      covers everyone matched and lists everyone who isn't. */}
+                  {t.expectedNet != null ? null : paidBy.length > 0 ? (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '6px' }}>
                       {paidBy.map(c => (
                         <span key={c.name} style={{
@@ -1707,14 +1838,26 @@ export default function MoneyModule({
                       onLogBill={openLogBillModal}
                     />
                   )}
+
+                  {rawTab && (
+                    <ShareTabMembers
+                      tab={rawTab}
+                      shareTabs={shareTabs}
+                      expenses={allExpenses ?? expenses}
+                      cycle={moneyCycle}
+                      onSaveExpense={onSaveExpense}
+                      onOpenRecord={openEditModal}
+                    />
+                  )}
                 </div>
               );
             })}
           </div>
           {shareCycles.length > 0 && (
             <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '9px', lineHeight: 1.5 }}>
-              里面每一笔<strong>单独都不算数</strong>。只有上面那个净额进这个月的帐 ——
-              少的算支出，多的算收入。下个月他们补上，那笔钱就推高下个月的净额，自己补回来。
+              里面每一笔<strong>单独都不算数</strong>。有设每个人给多少的本子，这个月先按
+              「账单 − 他们该给的」预留你自己出的那份，朋友早给迟给都不会变；月底再按实际结算。
+              有人一次给几个月，记的时候选「算哪个月的」，就会平均分到那几个月。
             </p>
           )}
 
@@ -2135,6 +2278,9 @@ export default function MoneyModule({
                       <AccountChip accounts={accounts} accountId={item.accountId} size="xs" />
                       {item.time && <span>{item.time}</span>}
                       {item.note && <span>· {item.note}</span>}
+                      {coverageLabel(item) && (
+                        <span style={{ color: 'var(--color-money)' }}>· 算 {coverageLabel(item)}</span>
+                      )}
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
@@ -2217,7 +2363,10 @@ export default function MoneyModule({
                           which is the one thing it is not — it is the tab
                           filling back up, and only the tab's net counts. */}
                       {shareTabName(item) && (
-                        <span style={{ color: 'var(--color-money)' }}>• 进「{shareTabName(item)}」，不算收入</span>
+                        <span style={{ color: 'var(--color-money)' }}>
+                          • {shareTabMemberName(item) ? `${shareTabMemberName(item)} · ` : ''}
+                          进「{shareTabName(item)}」{coverageLabel(item) ? ` · 算 ${coverageLabel(item)}` : ''}，不算收入
+                        </span>
                       )}
                     </div>
                   </div>
@@ -2746,6 +2895,139 @@ export default function MoneyModule({
                         整本这个月「收到的 − 付出去的」才算：多的算收入，少的算支出。
                       </p>
                     )}
+
+                    {/* 谁给的. Only for money coming in, only when the tab has
+                        members to pick from. Pre-picked from the amount or
+                        the sender's name, and says which, so a guess never
+                        passes for a fact. */}
+                    {formTab && formRefund && formTabMembers.length > 0 && (
+                      <div style={{ marginTop: '8px' }}>
+                        <label style={labelStyle}>谁给的？</label>
+                        <select
+                          value={effectiveMemberId}
+                          onChange={(e) => { setFormMemberTouched(true); setFormShareTabMemberId(e.target.value); }}
+                          style={inputStyle}
+                        >
+                          <option value="">不是这几个人 / 先不选</option>
+                          {formTabMembers.map(m => (
+                            <option key={m.id} value={String(m.id)}>{m.name}（每月 RM {num(m.amount).toFixed(2)}）</option>
+                          ))}
+                        </select>
+                        {!formMemberTouched && memberGuess && (
+                          <p style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.5 }}>
+                            {memberGuess.by === 'name' ? '按名字认出来的' : '按金额认出来的'}
+                            {memberGuess.months > 1 ? `：刚好是 ${memberGuess.months} 个月的钱` : ''}，可以改。
+                          </p>
+                        )}
+                        {/* An edit never has the guess applied for it — but a
+                            record with nobody named, whose amount clearly is
+                            someone's, still gets told so. */}
+                        {formMemberTouched && !effectiveMemberId && memberGuess && (
+                          <button
+                            type="button"
+                            onClick={() => setFormShareTabMemberId(String(memberGuess.memberId))}
+                            style={{
+                              marginTop: '4px', background: 'none', border: 'none', padding: 0,
+                              color: 'var(--color-diet)', fontSize: '0.66rem', fontWeight: '700', cursor: 'pointer',
+                            }}
+                          >
+                            看起来是 {formTabMembers.find(m => String(m.id) === String(memberGuess.memberId))?.name}
+                            {memberGuess.months > 1 ? `（${memberGuess.months} 个月）` : ''} → 选他
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 算哪个月的. Any direction — a friend prepaying, a friend
+                        paying last month's late, or him paying TIME three
+                        months ahead. Collapsed unless something says it
+                        matters: a spread already on the record, or a guess
+                        that differs from "this month". */}
+                    {formTab && (() => {
+                      const spread = effectiveCoversFrom !== ''
+                        && !(effectiveCoversMonths === 1 && effectiveCoversFrom === formOwnMonth);
+                      // Only meaningful once touched (an edit, or a changed
+                      // pick): before that the guess IS the value shown.
+                      const guessDiffers = formCoverTouched && coverGuess
+                        && (coverGuess.coversFrom !== (formCoversFrom || formOwnMonth)
+                          || coverGuess.coversMonths !== (Number(formCoversMonths) || 1));
+                      // Open whenever there is something to see — including
+                      // an edit whose record looks like several months'
+                      // money, which is exactly the 「是预付吗？」 tap from
+                      // the 共摊本 card landing here.
+                      const open = formCoverExpanded || spread || guessDiffers;
+                      const perMonth = (Number(formAmount) || 0) / effectiveCoversMonths;
+                      // Three months back (late payments) to six ahead
+                      // (prepayments) around the record's own month.
+                      const [oy, om] = formOwnMonth.split('-').map(Number);
+                      const monthOptions = Array.from({ length: 10 }, (_, i) => {
+                        const d = new Date(oy, om - 1 + (i - 3), 1);
+                        return getCycle(d).start;
+                      });
+                      if (!open) {
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => setFormCoverExpanded(true)}
+                            style={{
+                              marginTop: '8px', background: 'none', border: 'none', padding: 0,
+                              color: 'var(--text-muted)', fontSize: '0.66rem', cursor: 'pointer', textDecoration: 'underline',
+                            }}
+                          >
+                            这笔是别的月份的 / 不只一个月？
+                          </button>
+                        );
+                      }
+                      return (
+                        <div style={{ marginTop: '8px' }}>
+                          <label style={labelStyle}>这笔算哪个月的？</label>
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            <select
+                              value={effectiveCoversFrom || formOwnMonth}
+                              onChange={(e) => touchCover({ from: e.target.value })}
+                              style={inputStyle}
+                            >
+                              {monthOptions.map(start => (
+                                <option key={start} value={start}>
+                                  从 {start.slice(0, 4) === formOwnMonth.slice(0, 4) ? '' : `${start.slice(0, 4)} 年 `}{Number(start.slice(5, 7))} 月
+                                  {start === formOwnMonth ? '（记账这个月）' : ''}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={String(effectiveCoversMonths)}
+                              onChange={(e) => touchCover({ months: Number(e.target.value) })}
+                              style={{ ...inputStyle, width: '96px', flexShrink: 0 }}
+                            >
+                              {Array.from({ length: MAX_COVER_MONTHS }, (_, i) => i + 1).map(n => (
+                                <option key={n} value={String(n)}>{n} 个月</option>
+                              ))}
+                            </select>
+                          </div>
+                          <p style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.5 }}>
+                            {spread
+                              ? <>{effectiveCoversMonths > 1 ? '平均分到 ' : '算 '}<strong style={{ color: 'var(--text-secondary)' }}>
+                                  {coverageLabel({ coversFrom: effectiveCoversFrom, coversMonths: effectiveCoversMonths })}
+                                </strong>{effectiveCoversMonths > 1 ? `，每个月算 RM ${perMonth.toFixed(2)}` : ''}。
+                                户口余额还是算在真的到账那天。</>
+                              : '就算记账这个月的，跟平常一样。'}
+                            {!formCoverTouched && coverGuess && ' 按金额自动分的，可以改。'}
+                          </p>
+                          {guessDiffers && (
+                            <button
+                              type="button"
+                              onClick={() => touchCover({ from: coverGuess.coversFrom, months: coverGuess.coversMonths })}
+                              style={{
+                                marginTop: '4px', background: 'none', border: 'none', padding: 0,
+                                color: 'var(--color-diet)', fontSize: '0.66rem', fontWeight: '700', cursor: 'pointer',
+                              }}
+                            >
+                              看起来是 {coverGuess.coversMonths} 个月的钱 → 套用「{coverageLabel(coverGuess)}」
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </>
                 )}
               </div>
