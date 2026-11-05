@@ -110,7 +110,9 @@ export default function SyncPanel() {
             </div>
           </div>
 
-          {/* Never applied automatically — the user decides which copy wins. */}
+          {/* Loaded automatically at sign-in and launch; this only covers a
+              change made on the other device while this one is open, where a
+              surprise reload could throw away whatever is being typed. */}
           {sync.remoteNewer && (
             <div style={{
               background: 'var(--color-diet-soft)', border: '1px solid var(--color-diet)',
@@ -174,7 +176,8 @@ export default function SyncPanel() {
             </button>
           </div>
           <p style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '7px', lineHeight: 1.5 }}>
-            改动会自动上传，但载入要自己按 — 另一台的资料不会自己跑过来。
+            改动会自动上传；登入和每次打开 app 时会自动载入云端。
+            用着 app 的时候另一台有新资料，上面会提示你按「载入云端」。
             两边都对不上的话按「全部重新同步」，它会把两边完整对一次。
           </p>
         </>

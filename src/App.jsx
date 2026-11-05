@@ -450,6 +450,11 @@ export default function App() {
   // app can: the native listener queues payments while the WebView is asleep, so
   // nothing can be announced at the moment one arrives; what CAN be said is that
   // some are sitting there unconfirmed.
+  // The alerts' content, not just their count: "near the calorie limit"
+  // turning into "over it" keeps the count at 1, and keying on length left the
+  // old text on screen.
+  const alertsKey = alerts.map(a => `${a.id}:${a.text}`).join('|');
+
   const nudgeContext = useMemo(() => ({
     meals: allMeals,
     expenses: allExpenses,
@@ -488,7 +493,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     today, reminders, specialDays, supplements, supplementLog, allocations,
-    cycle, nudgeContext, notificationSettings, alerts.length,
+    cycle, nudgeContext, notificationSettings, alertsKey,
   ]);
 
   // History of past days' totals, used for the Overview trend chart & XP.

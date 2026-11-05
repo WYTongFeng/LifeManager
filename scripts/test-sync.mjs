@@ -6,7 +6,7 @@ globalThis.localStorage = {
   removeItem: k => store.delete(k),
 };
 const M = await import('../src/utils/syncModel.js');
-const { describeError } = await import('../src/utils/cloudSync.js');
+const { describeError, hasPulledOnce } = await import('../src/utils/cloudSync.js');
 const set = (k,v) => localStorage.setItem('lifemanager:'+k, JSON.stringify(v));
 const get = k => JSON.parse(localStorage.getItem('lifemanager:'+k));
 let pass = 0, fail = 0;
@@ -176,6 +176,24 @@ check('...and still takes it when nothing has changed since its last push',
 set('dailyBudget', 999);
 check('...but keeps its own when there are edits the cloud has not got',
   M.hasUnpushedMetaChanges('settings'), true);
+
+// 5. A NEW DEVICE PUSHED ITS DEFAULTS OVER THE REAL SETTINGS. Every screen
+// writes its default (budget 80, 2100 kcal…) to storage on first mount, and
+// sign-in used to schedule a push straight away — so the defaults went up with
+// { merge: true } and replaced the user's real values in the cloud before the
+// device had ever read them. Now: pull first, and no meta upload until a pull
+// has succeeded at least once.
+store.delete('lifemanager:sync:lastPulledAt');
+check('a device that never pulled is known to have never pulled', hasPulledOnce(), false);
+set('sync:lastPulledAt', 1234);
+check('...and one that has, has', hasPulledOnce(), true);
+check('meta documents are held back until the first pull',
+  /hasPulledOnce\(\) \? Object\.keys\(META_DOCS\) : \[\]/.test(src), true);
+const startup = src.slice(src.indexOf('async function startupSync'), src.indexOf('export async function init'));
+check('sign-in / launch pulls before it pushes',
+  startup.includes('await pullNow()') && startup.indexOf('await pullNow()') < startup.indexOf('schedulePush()'), true);
+check('the auth listener runs that startup sync, not a bare push',
+  /watchMarker\(\);\s*startupSync\(\);/.test(src), true);
 
 // A full re-pull of data this device already has must report "nothing changed"
 // rather than reloading the page and claiming it loaded everything again.

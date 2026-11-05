@@ -144,6 +144,16 @@ const getLastPulledAt = () => Number(readLocal('sync:lastPulledAt', 0)) || 0;
 const getPushVersion = () => Number(readLocal('sync:pushVersion', 0)) || 0;
 const getPullVersion = () => Number(readLocal('sync:pullVersion', 0)) || 0;
 
+/**
+ * Has this device ever read the cloud successfully?
+ *
+ * Until it has, its settings are just the defaults every screen writes on
+ * first mount (budget 80, 2100 kcal, stock routines…). Uploading those would
+ * overwrite the real values in the cloud, so meta documents are held back
+ * until the first successful pull.
+ */
+export const hasPulledOnce = () => getLastPulledAt() > 0;
+
 /** Displayed as 上次同步 — the last time either direction succeeded. */
 const getLastSyncedAt = () => Number(readLocal('lastSyncedAt', 0)) || 0;
 
@@ -223,12 +233,31 @@ async function attachAuthListener(s) {
         status: 'ready', error: null,
       });
       watchMarker();
-      schedulePush();   // flush anything edited while offline
+      startupSync();
     } else {
       setState({ user: null, status: 'signed-out' });
       stopWatching();
     }
   });
+}
+
+/**
+ * Runs on every sign-in and every launch while signed in: read the cloud
+ * first, then upload. Reading first means a new device shows its data
+ * straight after login, and a device that has never pulled can't push default
+ * settings over the real ones. A pull that changes anything reloads the page;
+ * the next run then finds nothing new, so it doesn't loop. The sessionStorage
+ * stamp is a backstop against a reload loop anyway.
+ */
+const AUTO_PULL_KEY = PREFIX + 'autoPullAt';
+async function startupSync() {
+  let recent = false;
+  try {
+    recent = Date.now() - Number(sessionStorage.getItem(AUTO_PULL_KEY) || 0) < 15_000;
+    sessionStorage.setItem(AUTO_PULL_KEY, String(Date.now()));
+  } catch { /* sessionStorage unavailable: just pull */ }
+  if (!recent || !hasPulledOnce()) await pullNow();
+  schedulePush();   // flush anything edited while offline
 }
 
 export async function init() {
@@ -482,7 +511,9 @@ export async function pushNow({ force = false } = {}) {
     }
     afterCommit.push(() => setSyncedIds(DAILY_STATS, dayIds));
 
-    // Meta documents, skipped when their contents haven't changed.
+    // Meta documents, skipped when their contents haven't changed — and held
+    // back entirely until this device has pulled once (see hasPulledOnce):
+    // before that they are first-launch defaults, not the user's settings.
     //
     // MERGED, NEVER REPLACED. `readMetaDoc` returns only the keys this device
     // actually has, and a plain `set()` replaces the whole document — so a
@@ -490,7 +521,8 @@ export async function pushNow({ force = false } = {}) {
     // as {} and DELETED the PC's accounts from the cloud. The PC then never
     // re-sent them, because its own fingerprint hadn't changed, and the data
     // was stranded on one device with sync reporting success.
-    for (const name of Object.keys(META_DOCS)) {
+    const metaNames = hasPulledOnce() ? Object.keys(META_DOCS) : [];
+    for (const name of metaNames) {
       const data = readMetaDoc(name);
       if (!Object.keys(data).length) continue;   // nothing here to send
       const print = fingerprint(data);
@@ -554,7 +586,17 @@ function stripSyncFields(doc) {
  * Nothing is lost by doing so — the merge is per record and per id — it just
  * costs a read per document, which is why it isn't the default.
  */
-export async function pullNow({ force = false } = {}) {
+// One pull at a time: startup, the sign-in flow and a button press can all ask
+// at once, and two overlapping pulls would both merge and both reload.
+let pullInFlight = null;
+export function pullNow({ force = false } = {}) {
+  if (!pullInFlight) {
+    pullInFlight = doPull({ force }).finally(() => { pullInFlight = null; });
+  }
+  return pullInFlight;
+}
+
+async function doPull({ force }) {
   const s = await loadSdk();
   if (!s.auth.currentUser) return 0;
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, Sparkles, ShieldCheck, AlertTriangle, Download } from '../utils/icons';
+import { Bell, Sparkles, ShieldCheck, AlertTriangle, Download, Cloud } from '../utils/icons';
 import BackupModal from './BackupModal';
 import { daysSinceBackup } from '../utils/backup';
 import { subscribe, getState } from '../utils/cloudSync';
@@ -72,23 +72,33 @@ export default function Header({ onOpenExport, attentionCount = 0 }) {
                 backup modal, which is not a place you open unprompted — so a
                 phone could sit for weeks missing everything typed on the PC and
                 say 已连线 the whole time. */}
-            <button
-              onClick={() => setBackupOpen(true)}
-              title={sync.remoteNewer ? '云端有这台没有的资料 — 按我载入' : '备份 / 汇入资料'}
-              style={{
-                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                fontSize: '0.7rem',
-                color: sync.remoteNewer ? 'var(--color-money)'
-                  : staleBackup ? 'var(--color-diet)' : 'var(--text-secondary)',
-                display: 'flex', alignItems: 'center', gap: '4px',
-              }}
-            >
-              {sync.remoteNewer
-                ? <><Download size={11} /> 另一台有新资料 — 按我载入</>
-                : staleBackup
-                  ? <><AlertTriangle size={11} /> 只存在这台 — 按我备份</>
-                  : <><ShieldCheck size={11} color="var(--color-money)" /> Saved on this device only</>}
-            </button>
+            {/* One status line, most urgent first. Signed in, the cloud IS the
+                backup, so the old "只存在这台" nag would be wrong there; signed
+                out, sign-in has to be one tap away rather than buried. */}
+            {(() => {
+              const [tone, Icon, text] =
+                sync.remoteNewer ? ['var(--color-money)', Download, '另一台有新资料 — 按我载入']
+                : sync.user && sync.status === 'error' ? ['var(--color-accent-red)', AlertTriangle, '同步出错 — 按我查看']
+                : sync.status === 'pulling' ? ['var(--text-secondary)', Download, '正在载入云端…']
+                : sync.status === 'pushing' ? ['var(--text-secondary)', Cloud, '正在上传…']
+                : sync.user ? ['var(--color-money)', ShieldCheck, '已同步到云端']
+                : sync.available ? ['var(--color-diet)', Cloud, '没登入 — 按我登入同步']
+                : staleBackup ? ['var(--color-diet)', AlertTriangle, '只存在这台 — 按我备份']
+                : ['var(--text-secondary)', ShieldCheck, '只存在这台 · 已备份'];
+              return (
+                <button
+                  onClick={() => setBackupOpen(true)}
+                  title="云端同步 / 备份"
+                  style={{
+                    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                    fontSize: '0.7rem', color: tone,
+                    display: 'flex', alignItems: 'center', gap: '4px',
+                  }}
+                >
+                  <Icon size={11} /> {text}
+                </button>
+              );
+            })()}
           </div>
         </div>
 
